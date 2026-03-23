@@ -56,6 +56,8 @@ The database is SQLite. Do NOT use MySQL, PostgreSQL, or SQL Server specific syn
 - PREFER header-level joins when possible (e.g., sales_order_headers -> outbound_delivery_headers -> billing_document_headers).
 - Use item-level joins ONLY when explicitly necessary to extract specific material or quantity data.
 - Avoid unnecessary joins to sales_order_items unless item-level granularity is literally requested.
+- STRICT RULE: Do NOT use subqueries or nested SELECT statements inside JOIN conditions.
+- STRICT RULE: For reverse traces starting from a Billing Document, strictly follow: billing_document_headers -> billing_document_items -> outbound_delivery_items -> sales_order_items.
 
 --- INSTRUCTIONS ---
 - Respond with standard SQLite SQL ONLY.

@@ -33,6 +33,11 @@ function validateSql(sql) {
         throw new Error('SQLite administrative and extension functions are restricted.');
     }
 
+    // Reject computationally dangerous nested Subqueries inside execution JOINS preserving explicit indexing flows
+    if (/\bJOIN\b[^\n]*\(\s*SELECT/i.test(sql)) {
+        throw new Error('Execution rejected: Subqueries inside JOIN conditions break multi-hop query graphs. Please use explicit direct table joins.');
+    }
+
     return true;
 }
 

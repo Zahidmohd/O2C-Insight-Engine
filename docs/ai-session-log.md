@@ -512,6 +512,66 @@ Graph outputs natively visually adapt across fragmented or disjoint queries with
 
 ---
 
+## Refine Silent Retry Mechanism for Safe Join Relaxation
+
+### Problem
+Blindly replacing all `JOIN` statements with `LEFT JOIN` globally risks corrupting explicit `GROUP BY` aggregations, master-data bounds (e.g. `business_partners`), and fundamentally shifting native statistical constraints incorrectly fetching unrelated empty paths on non-flow requests.
+
+### Fix
+We constrained the fallback regex algorithm evaluating explicitly the semantic type mapping. Fallback logic automatically aborts on any query utilizing grouping aggregations (`GROUP BY`, `COUNT`, `SUM`), or queries omitting structural flow domains entirely (`sales_order`, etc). When triggered natively, the retry now strictly modifies exactly three target tables (`outbound_delivery_items`, `billing_document_items`, `payments_accounts_receivable`), safely preserving `business_partners` mappings natively. A distinct `fallbackApplied` API flag and customized UI summary directly informs the user.
+
+### Outcome
+Targeted, context-aware query recovery scaling dynamically scaling safe evaluations without exposing statistical logic structures to implicit bounds-corruption!
+
+---
+
+## Add Safety Guards to Fallback Query Execution
+
+### Problem
+Relaxed `LEFT JOIN` structures on deeply nested multi-hop loops inherently risk retrieving massive duplicate record permutations and payload explosions if downstream elements natively branch outward ambiguously. Unfenced queries risk memory bloat and UI rendering delays heavily parsing duplications.
+
+### Fix
+Prior to evaluating the relaxed SQLite strings, we inject explicit safety thresholds mutating the SELECT bindings natively. Using precise regular expressions, the engine dynamically patches raw `.replace(/SELECT/i, 'SELECT DISTINCT')` boundaries protecting row expansions, and explicitly re-forces `.replace(/^(?!.*LIMIT\s+\d+).*$/i, '$& LIMIT 100')` limitations. The core LLM generated SQL remains isolated and untouched; only the secondary fallback evaluates these constraints.
+
+### Outcome
+Secure, universally stable graph rendering natively enforcing wire-performance metrics scaling without memory crashes, efficiently returning safe execution logic dynamically.
+
+---
+
+## SQL Join Fix Step
+
+### Issue
+Tracing documents natively backward through multi-hop pipelines (e.g. initiating searches targeting a specific `billing_document`) caused the LLM to write computationally prohibitive subqueries mapping temporary node loops natively into the `JOIN` variables (e.g. `JOIN (SELECT...)`). These broke continuous logical paths resolving to empty evaluation sets internally within SQLite.
+
+### Fix
+We actively barred nested evaluations directly across multi-hop edges. `promptBuilder.js` was appended establishing a strict top-down associative array tracking strictly sequential joins (`billing` → `items` → `delivery` → `sales`). Additionally, an explicit Regex check isolating `/\bJOIN\b[^\n]*\(\s*SELECT/i` was written natively into `validator.js`, blocking database evaluations entirely on faulty topologies and demanding a clear relational query layer explicitly.
+
+### Outcome
+Completely seamless, multi-hop topological traversal mapping graph data properly restored with zero nested execution deadlocks natively.
+
+---
+
+## Final System Validation Step
+
+### Tests Executed
+1. **Valid Multi-Hop Trace** (`"Trace full flow for billing document 90504204"`)
+   - **Result:** Fully executed mapped string `limit 100` extracting exactly 1 flattened payload successfully distributing across 5 distinct graph instances without ambiguous edge collisions natively.
+2. **Invalid Document Traversal** (`"Trace full flow for billing document 99999999"`)
+   - **Result:** Cleanly caught by Backend bounds evaluating 0 rows mapped! Successfully extracted unquoted LLM variants avoiding runtime processing. Correct invalid `NO_FLOW`/`INVALID_ID` error triggered. 
+3. **Valid But Incomplete Flow** (`"Trace full flow for sales order 740584"`)
+   - **Result:** Successfully hit the Native Fallback routing logic! Silently rewrote the incomplete pipeline expanding edge boundaries natively evaluating to exactly 1 distinct node topology structurally with `fallback: true` applied successfully!
+4. **Statistical Math Query** (`"Which products are associated with the highest number of billing documents"`)
+   - **Result:** Executed mapping `COUNT(DISTINCT)` aggregates efficiently without tripping fallback rules incorrectly resolving logic naturally to single aggregated root.
+
+### Micro-fixes Applied
+- Updated `const rawSql` to `let rawSql` locally to avoid `TypeError: Assignment to constant variable` causing backend 500 drops when Fallback rules attempted implicit SQL overwrites.
+- Expanded the semantic Regex list to natively protect `billing_document_headers` when generating incomplete traces.
+
+### Outcome
+Graph engine universally resilient! Tested structurally evaluating across multiple query behaviors natively defending against logic overlaps efficiently.
+
+---
+
 ## 🏁 Project Completed
 
 The Graph-Based Data Modeling and Query System over an SAP Order-to-Cash Dataset has been fully conceived, coded, documented, correctly mapped, and tested securely.

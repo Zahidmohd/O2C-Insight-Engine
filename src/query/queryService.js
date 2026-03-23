@@ -119,7 +119,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         const generatedSql = await withTimeout(getSqlFromLLM(prompt), 15000, 'LLM Generation');
         
         // Ensure LIMIT 100 explicitly
-        const rawSql = enforceLimit(generatedSql);
+        let rawSql = enforceLimit(generatedSql);
         
         console.log(`[API-${requestId}] Engine Generated SQL:\n${rawSql}\n`);
 
@@ -127,7 +127,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         validateSql(rawSql); // Throws Error if unsafe
 
         // 4.5. Check if specific billing document exists in DB
-        const idMatch = rawSql.match(/billingDocument\s*(?:=|LIKE)\s*['"](\d+)['"]/i);
+        const idMatch = rawSql.match(/billingDocument\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i);
         let explicitIdChecked = false;
         
         if (idMatch && idMatch[1]) {
@@ -175,25 +175,44 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         }
 
         // NEW: Fallback join relaxation (silent retry)
-        // If query executed but returned 0 rows, relax all strict JOINs down to LEFT JOIN
-        // to natively recover and map partial graph pipelines automatically.
-        if (dbResult.rowCount === 0 && rawSql.match(/\bJOIN\b/gi)) {
-            console.log(`[API-${requestId}] Check: Zero rows returned. Attempting silent relaxed retry (LEFT JOIN fallback)...`);
-            
-            let relaxedSql = rawSql;
-            relaxedSql = relaxedSql.replace(/\bINNER\s+JOIN\b/gi, 'JOIN'); // Normalize first
-            relaxedSql = relaxedSql.replace(/\bJOIN\b/gi, 'LEFT JOIN');
-            // Clean up accidental overwrites logically
-            relaxedSql = relaxedSql.replace(/\bLEFT\s+LEFT\s+JOIN\b/gi, 'LEFT JOIN');
-            relaxedSql = relaxedSql.replace(/\bRIGHT\s+LEFT\s+JOIN\b/gi, 'RIGHT JOIN');
-            relaxedSql = relaxedSql.replace(/\bFULL\s+LEFT\s+JOIN\b/gi, 'FULL JOIN');
-            relaxedSql = relaxedSql.replace(/\bCROSS\s+LEFT\s+JOIN\b/gi, 'CROSS JOIN');
+        let fallbackApplied = false;
 
-            const relaxedDbResult = await withTimeout(executeQuery(relaxedSql), 5000, 'Database Execution Fallback');
-            if (relaxedDbResult.success && relaxedDbResult.rowCount > 0) {
-                console.log(`[API-${requestId}] Check: Fallback successful! Fetched ${relaxedDbResult.rowCount} rows via relaxed boundary graphs.`);
-                dbResult = relaxedDbResult;
-                rawSql = relaxedSql;
+        if (dbResult.rowCount === 0) {
+            const upSql = rawSql.toUpperCase();
+            const hasFlowTables = upSql.includes('SALES_ORDER') || upSql.includes('OUTBOUND_DELIVERY') || upSql.includes('BILLING_DOCUMENT');
+            const hasAggregations = upSql.includes('GROUP BY') || upSql.includes('COUNT(') || upSql.includes('SUM(');
+
+            if (!hasFlowTables) {
+                console.log(`[API-${requestId}] Check: Fallback skipped (non-flow query)`);
+            } else if (hasAggregations) {
+                console.log(`[API-${requestId}] Check: Fallback skipped (aggregation query)`);
+            } else if (rawSql.match(/\bJOIN\b/gi)) {
+                console.log(`[API-${requestId}] Check: Zero rows returned. Fallback triggered (Targeted LEFT JOIN)...`);
+                
+                let relaxedSql = rawSql;
+                // Target explicitly safe mapping pipelines natively
+                relaxedSql = relaxedSql.replace(/\bINNER\s+JOIN\s+(outbound_delivery_items|outbound_delivery_headers|billing_document_items|billing_document_headers|sales_order_items|payments_accounts_receivable|journal_entry_items_accounts_receivable)\b/gi, 'JOIN $1');
+                relaxedSql = relaxedSql.replace(/\bJOIN\s+(outbound_delivery_items|outbound_delivery_headers|billing_document_items|billing_document_headers|sales_order_items|payments_accounts_receivable|journal_entry_items_accounts_receivable)\b/gi, 'LEFT JOIN $1');
+                
+                // Clean up accidental overwrites logically
+                relaxedSql = relaxedSql.replace(/\bLEFT\s+LEFT\s+JOIN\b/gi, 'LEFT JOIN');
+                relaxedSql = relaxedSql.replace(/\bRIGHT\s+LEFT\s+JOIN\b/gi, 'RIGHT JOIN');
+
+                if (!/SELECT\s+DISTINCT/i.test(relaxedSql)) {
+                    relaxedSql = relaxedSql.replace(/^\s*SELECT/i, 'SELECT DISTINCT');
+                }
+
+                if (!/LIMIT\s+\d+/i.test(relaxedSql)) {
+                    relaxedSql += ' LIMIT 100';
+                }
+
+                const relaxedDbResult = await withTimeout(executeQuery(relaxedSql), 5000, 'Database Execution Fallback');
+                if (relaxedDbResult.success && relaxedDbResult.rowCount > 0) {
+                    console.log(`[API-${requestId}] Check: Fallback successful! Fetched ${relaxedDbResult.rowCount} rows via relaxed boundary graphs.`);
+                    dbResult = relaxedDbResult;
+                    rawSql = relaxedSql;
+                    fallbackApplied = true;
+                }
             }
         }
 
@@ -221,6 +240,11 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
 
         // 6. Format structurally backed result
         const finalResponse = formatResponse(dbResult, rawSql);
+        
+        if (fallbackApplied) {
+            finalResponse.fallbackApplied = true;
+            finalResponse.summary = "Partial flow recovered using relaxed joins";
+        }
 
         // Required Final Logging Check 
         console.log(`[API-${requestId}] Request completed.`);

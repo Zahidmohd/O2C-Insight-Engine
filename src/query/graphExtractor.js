@@ -109,18 +109,15 @@ function extractGraph(rows) {
         }
 
         // FULFILLED_BY (SalesOrder -> Delivery)
-        // Happens if we have both SO and DEL in the row, or via explicit ref fields
-        const soId = row.referenceSdDocument || row.salesOrder;
-        if (soId && row.deliveryDocument) {
-            addEdge(`SO_${soId}`, `DEL_${row.deliveryDocument}`, 'FULFILLED_BY');
+        if (row.salesOrder && row.deliveryDocument) {
+            addEdge(`SO_${row.salesOrder}`, `DEL_${row.deliveryDocument}`, 'FULFILLED_BY');
+        } else if (row.referenceSdDocument && row.deliveryDocument && !row.salesOrder) {
+            // Pure fallback if Sales Order is entirely omitted but a generic reference exists natively.
+            addEdge(`SO_${row.referenceSdDocument}`, `DEL_${row.deliveryDocument}`, 'FULFILLED_BY');
         }
 
         // BILLED_AS (Delivery -> Billing)
-        if (row.referenceSdDocument && row.billingDocument) {
-            // Because referenceSdDocument might be a delivery doc
-            // (We assume if BOTH exist on the same row returned by the LLM, they represent the BILLED_AS path)
-            addEdge(`DEL_${row.referenceSdDocument}`, `BILL_${row.billingDocument}`, 'BILLED_AS');
-        } else if (row.deliveryDocument && row.billingDocument) {
+        if (row.deliveryDocument && row.billingDocument) {
             addEdge(`DEL_${row.deliveryDocument}`, `BILL_${row.billingDocument}`, 'BILLED_AS');
         }
 
@@ -135,6 +132,7 @@ function extractGraph(rows) {
         }
 
         // Customer Links
+        const soId = row.salesOrder || row.referenceSdDocument; // fallback correctly
         if (soId && customerId) addEdge(`CUST_${customerId}`, `SO_${soId}`, 'ORDERED');
         if (row.billingDocument && customerId) addEdge(`BILL_${row.billingDocument}`, `CUST_${customerId}`, 'BILLED_TO');
     });
