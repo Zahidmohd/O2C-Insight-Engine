@@ -678,6 +678,39 @@ Cancellations natively map to accurate `bdi -> odi -> soh` traversal networks co
 
 ---
 
+## Fix: Graph Rendering Decision (FINAL)
+
+### Problem
+Previously, mathematical aggregations bypassed the graph entirely, returning a completely blank canvas. While this prevented broken edges, it left the interface visually empty when resolving `COUNT` or `SUM` equations.
+
+### Fix (queryService.js)
+- Expanded the **Topological pre-flight check** (Step 5.5).
+- Dynamically scans the generated SQL for `COUNT(`, `SUM(`, `AVG(`, `MIN(`, `MAX(`, `GROUP BY`, and `HAVING`.
+- If an aggregation is flagged, the system inherently **bypasses relationship traversal** (no edges).
+- Instead, it dynamically loops through the aggregated tabular rows and creates **SIMPLE STANDALONE NODES** directly onto the canvas mapping the summarized mathematics securely.
+- Automatically injects the UI-friendly tooltip: *"This query returns aggregated results. Showing summarized nodes instead of relationships."*
+- Unaffected: Any SQL without aggregations (like complex multi-row relationship queries) perfectly bypasses this step generating complex graph topologies fully.
+
+### Outcome
+Mathematical calculations and ranked top-N lists now render securely inside the data tables *alongside* visually appealing, disconnected summary nodes.
+
+---
+
+## Fix: Attach Properties to Nodes (Frontend Tooltips)
+
+### Problem
+When the user clicked on a Graph Node inside the UI, the tooltip overlay completely lacked context. Although the nodes were visually structured with Labels and IDs, the underlying raw metadata and aggregated insights were completely stripped during the graphing pipeline.
+
+### Fix (`graphExtractor.js` & `queryService.js`)
+- Updated **BOTH** the Relationship Graph pipeline and the Aggregation Summary pipeline.
+- Automatically injects an overarching `properties` object within the Cytoscape elements array: `properties: row`
+- Bypasses stripping logic recursively streaming the full SQL dictionary payloads natively through the nodes.
+
+### Outcome
+Every node (Sales Orders, Invoices, Summary Nodes, etc.) now accurately carries ALL contextual metadata generated from the SQL join! The UI tooling now securely reads `node.data.properties` and draws rich, informative overlay cards perfectly matching the user's reference mockup.
+
+---
+
 ## 🏁 Project Completed
 
 The Graph-Based Data Modeling and Query System over an SAP Order-to-Cash Dataset has been fully conceived, coded, documented, correctly mapped, and tested securely.

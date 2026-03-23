@@ -17,7 +17,8 @@ function extractGraph(rows) {
             nodeMap.set(id, {
                 id,
                 type: 'SalesOrder',
-                label: `Sales Order\n${row.salesOrder}`
+                label: `Sales Order\n${row.salesOrder}`,
+                properties: row
             });
         }
 
@@ -27,7 +28,8 @@ function extractGraph(rows) {
             nodeMap.set(id, {
                 id,
                 type: 'Delivery',
-                label: `Delivery\n${row.deliveryDocument}`
+                label: `Delivery\n${row.deliveryDocument}`,
+                properties: row
             });
         }
 
@@ -37,7 +39,8 @@ function extractGraph(rows) {
             nodeMap.set(id, {
                 id,
                 type: 'BillingDocument',
-                label: `Billing\n${row.billingDocument}`
+                label: `Billing\n${row.billingDocument}`,
+                properties: row
             });
         }
 
@@ -49,7 +52,8 @@ function extractGraph(rows) {
             nodeMap.set(id, {
                 id,
                 type: 'JournalEntry',
-                label: `Journal Entry\n${row.accountingDocument}`
+                label: `Journal Entry\n${row.accountingDocument}`,
+                properties: row
             });
         }
 
@@ -59,7 +63,8 @@ function extractGraph(rows) {
             nodeMap.set(id, {
                 id,
                 type: 'Payment',
-                label: `Payment\n${row.clearingAccountingDocument}`
+                label: `Payment\n${row.clearingAccountingDocument}`,
+                properties: row
             });
         }
 
@@ -70,7 +75,8 @@ function extractGraph(rows) {
             nodeMap.set(id, {
                 id,
                 type: 'Customer',
-                label: `Customer\n${customerId}`
+                label: `Customer\n${customerId}`,
+                properties: row
             });
         }
 
@@ -81,7 +87,8 @@ function extractGraph(rows) {
             nodeMap.set(id, {
                 id,
                 type: 'Product',
-                label: `Product\n${prod}`
+                label: `Product\n${prod}`,
+                properties: row
             });
         }
 
@@ -92,7 +99,8 @@ function extractGraph(rows) {
             nodeMap.set(id, {
                 id,
                 type: 'Plant',
-                label: `Plant\n${plantId}`
+                label: `Plant\n${plantId}`,
+                properties: row
             });
         }
 

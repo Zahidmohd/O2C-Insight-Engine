@@ -273,9 +273,85 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
             };
         }
 
-        // 6. Format structurally backed result
-        const finalResponse = formatResponse(dbResult, rawSql);
+        // 5.5. Detect Aggregation Queries (CRITICAL UI CONTROL)
+        const upperSql = rawSql.toUpperCase();
+        const isAggregation = upperSql.includes('COUNT(') || 
+                              upperSql.includes('SUM(') || 
+                              upperSql.includes('AVG(') || 
+                              upperSql.includes('MIN(') || 
+                              upperSql.includes('MAX(') || 
+                              upperSql.includes('GROUP BY') ||
+                              upperSql.includes('HAVING');
         
+        let finalResponse;
+
+        if (isAggregation) {
+            console.log(`[API-${requestId}] Check: Aggregation query detected. Showing summarized nodes.`);
+            
+            // Build simple nodes without relationships
+            const aggNodes = dbResult.rows.map((row, i) => {
+                const keys = Object.keys(row);
+                
+                if (keys.length === 1) {
+                    const metricKey = keys[0];
+                    return {
+                        data: {
+                            id: `agg_node_${i}`,
+                            label: `Total ${metricKey}: ${row[metricKey]}`,
+                            type: 'Aggregation'
+                        }
+                    };
+                }
+
+                // Assume last column or one matching SUM/COUNT/TOTAL is the aggregated value
+                const aggKey = keys.find(k => k.match(/SUM|COUNT|AVG|MIN|MAX|amount|total/i)) || keys[keys.length - 1];
+                const entityKey = keys.find(k => k !== aggKey) || keys[0];
+
+                let nodeType = 'Aggregation';
+                const lowerEntity = entityKey.toLowerCase();
+                
+                if (lowerEntity.includes('customer') || lowerEntity.includes('partner') || lowerEntity.includes('soldtoparty')) {
+                    nodeType = 'Customer';
+                } else if (lowerEntity.includes('company')) {
+                    nodeType = 'Company';
+                } else if (lowerEntity.includes('plant')) {
+                    nodeType = 'Plant';
+                } else if (lowerEntity.includes('material') || lowerEntity.includes('product')) {
+                    nodeType = 'Product';
+                } else if (lowerEntity.includes('document') || lowerEntity.includes('order')) {
+                    nodeType = 'Document';
+                } else {
+                    nodeType = entityKey.charAt(0).toUpperCase() + entityKey.slice(1);
+                }
+
+                // Format: "Customer 100017 (totalNetAmount: 5000)"
+                const labelStr = `${nodeType} ${row[entityKey]} (${aggKey}: ${row[aggKey]})`;
+
+                return {
+                    data: {
+                        id: `agg_node_${i}`,
+                        label: labelStr,
+                        type: nodeType,
+                        properties: row
+                    }
+                };
+            });
+
+            finalResponse = {
+                success: true,
+                summary: "This query returns aggregated results. Showing summarized nodes instead of relationships.",
+                reason: 'AGGREGATION',
+                rowCount: dbResult.rowCount,
+                keyFields: dbResult.rows.length > 0 ? Object.keys(dbResult.rows[0]) : [],
+                executionTimeMs: Number(dbResult.executionTimeMs),
+                generatedSql: rawSql,
+                data: dbResult.rows,
+                graph: { nodes: aggNodes, edges: [] }
+            };
+        } else {
+            // 6. Format structurally backed result natively tracking edges
+            finalResponse = formatResponse(dbResult, rawSql);
+        }
         if (fallbackApplied) {
             finalResponse.fallbackApplied = true;
             if (explicitCustChecked) {
