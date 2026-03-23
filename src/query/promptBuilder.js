@@ -22,7 +22,7 @@ The database is SQLite. Do NOT use MySQL, PostgreSQL, or SQL Server specific syn
 10. products (product PK, productType, productGroup)
 11. product_descriptions (product, language, productDescription)
 
---- VALIDATED JOIN RELATIONSHIPS (MUST USE THESE) ---
+--- VALIDATED JOIN RELATIONSHIPS (MUST USE THESE EXACTLY) ---
 
 1. Sales Order to Delivery (FULFILLED_BY):
    JOIN outbound_delivery_items odi 
@@ -37,6 +37,8 @@ The database is SQLite. Do NOT use MySQL, PostgreSQL, or SQL Server specific syn
    JOIN billing_document_items bdi 
      ON bdi.referenceSdDocument = odi.deliveryDocument
     AND bdi.referenceSdDocumentItem = odi.deliveryDocumentItem
+
+   IMPORTANT: billing_document_items.referenceSdDocument links to outbound_delivery_items.deliveryDocument (NOT to odi.referenceSdDocument).
 
 3. Billing to Journal Entry (POSTED_AS):
    LEFT JOIN journal_entry_items_accounts_receivable je 
@@ -53,11 +55,13 @@ The database is SQLite. Do NOT use MySQL, PostgreSQL, or SQL Server specific syn
    JOIN business_partners bp ON bp.customer = [table].soldToParty (or customer)
 
 --- JOIN STRATEGY RULES ---
-- PREFER header-level joins when possible (e.g., sales_order_headers -> outbound_delivery_headers -> billing_document_headers).
-- Use item-level joins ONLY when explicitly necessary to extract specific material or quantity data.
+- PREFER header-level joins when possible.
+- Use item-level joins ONLY when explicitly necessary.
 - Avoid unnecessary joins to sales_order_items unless item-level granularity is literally requested.
 - STRICT RULE: Do NOT use subqueries or nested SELECT statements inside JOIN conditions.
-- STRICT RULE: For reverse traces starting from a Billing Document, strictly follow: billing_document_headers -> billing_document_items -> outbound_delivery_items -> sales_order_items.
+- STRICT RULE: For reverse traces starting from a Billing Document, strictly follow: billing_document_headers -> billing_document_items -> outbound_delivery_items -> sales_order_headers.
+- STRICT RULE: When filtering by customer (soldToParty) or showing a customer's full flow, use LEFT JOIN for ALL downstream tables (outbound_delivery_items, billing_document_items, billing_document_headers, journal entries, payments) so partial flows are returned.
+- STRICT RULE: For "delivered but not billed" queries, always join billing_document_items to outbound_delivery_items using: bdi.referenceSdDocument = odi.deliveryDocument AND bdi.referenceSdDocumentItem = odi.deliveryDocumentItem. Never use odi.referenceSdDocument for this join.
 
 --- INSTRUCTIONS ---
 - Respond with standard SQLite SQL ONLY.
@@ -65,6 +69,7 @@ The database is SQLite. Do NOT use MySQL, PostgreSQL, or SQL Server specific syn
 - Only SELECT queries. Never DELETE, UPDATE, DROP, PRAGMA.
 - Do not make up tables. Use only the provided schema.
 - Try to answer the user's question as accurately and simply as possible.
+- CRITICAL: All ID columns (salesOrder, billingDocument, deliveryDocument, soldToParty, customer, businessPartner) are TEXT type. Always wrap filter values in single quotes. Example: WHERE soldToParty = '100017', NOT WHERE soldToParty = 100017.
 `;
 
 function buildPrompt(userQuery) {

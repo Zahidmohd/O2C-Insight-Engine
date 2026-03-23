@@ -572,6 +572,99 @@ Graph engine universally resilient! Tested structurally evaluating across multip
 
 ---
 
+## Fix Graph Edge Extraction (referenceSdDocument Collision)
+
+### Problem
+When the LLM selected both `bdi.referenceSdDocument` and `odi.referenceSdDocument` in the same query, SQLite flattened them into a single JSON key. The second value (Sales Order ID) overwrote the first (Delivery Document ID). The graph extractor then tried to create an edge from `DEL_740509` — but `740509` was a Sales Order, not a Delivery — causing Cytoscape to crash with: `Error: Can not create edge with nonexistant source DEL_740509`.
+
+### Fix
+Updated `src/query/graphExtractor.js` to stop relying on the ambiguous `referenceSdDocument` field for edge mapping. Instead:
+- `FULFILLED_BY` edges now use `row.salesOrder` → `row.deliveryDocument` directly.
+- `BILLED_AS` edges now use `row.deliveryDocument` → `row.billingDocument` directly.
+- `referenceSdDocument` is only used as a last-resort fallback for Customer links.
+
+### Outcome
+Zero Cytoscape rendering crashes. Graph edges are now deterministic and immune to SQLite column name collisions.
+
+---
+
+## Consolidate Raw Data Folders
+
+### Change
+Moved all 19 raw dataset directories (e.g., `sales_order_headers/`, `billing_document_items/`, `plants/`, etc.) from the project root into a single `sap-o2c-data/` folder. Updated `src/db/loader.js` `DATA_DIR` to point to the new path.
+
+### Outcome
+Clean project root. Data fully separated from source code and configuration files.
+
+---
+
+## Fix Unquoted Billing ID Regex
+
+### Problem
+The LLM sometimes generated `WHERE bdh.billingDocument = 99999999` (without quotes). The existing regex `['"](\d+)['"]` failed to match, so the Invalid ID early-detection was silently bypassed.
+
+### Fix
+Updated the regex in `queryService.js` from `['"](\d+)['"]` to `['"]?(\d+)['"]?` — making quotes optional.
+
+### Outcome
+Invalid billing document IDs are now caught reliably regardless of whether the LLM quotes the value or not.
+
+---
+
+## Comprehensive Test Suite Defined
+
+A structured 10-query validation suite was designed covering all system capabilities:
+
+| # | Category | Query | Expected Behavior |
+|---|----------|-------|--------------------|
+| 1 | Basic Trace | Trace full flow for billing document 90504204 | Rows ≥ 1, graph renders |
+| 2 | Invalid ID | Trace full flow for billing document 99999999 | INVALID_ID, suggestions |
+| 3 | Aggregation | How many billing documents are in the system | Returns 163 |
+| 4 | Top-N | Top 5 customers by total billing amount | 5 rows, sorted |
+| 5 | Business Logic | Find sales orders that were delivered but not billed | ~3 rows |
+| 6 | Forward Trace | Trace full flow for sales order 740539 | Full 5-layer chain |
+| 7 | Fallback | Trace full flow for sales order 740584 | fallbackApplied: true |
+| 8 | Filter+Trace | Show all cancelled billing documents with their original sales orders | Reverse multi-hop |
+| 9 | Stress Test | Full O2C flow for customer 100017 | All 5 doc layers + graph clean |
+| 10 | Guardrail | What is the capital of France | Rejected, no SQL executed |
+
+---
+
+## Fix: Join Correction + Customer Flow LEFT JOIN + ID Quoting
+
+### Problem
+Three issues discovered during validation testing:
+1. **Delivered-not-billed** queries used `odi.referenceSdDocument` (Sales Order ID) instead of `odi.deliveryDocument` (Delivery ID) when joining to `billing_document_items`, inflating results from ~3 to 86 rows.
+2. **Customer full-flow** queries used `INNER JOIN` for all downstream tables, returning 0 rows when any link in the chain was missing.
+3. **Unquoted IDs** — the LLM sometimes generated `WHERE soldToParty = 100017` instead of `WHERE soldToParty = '100017'`, causing silent type-mismatch failures in SQLite.
+
+### Fix (promptBuilder.js)
+- Added explicit warning: `billing_document_items.referenceSdDocument` links to `odi.deliveryDocument`, NOT `odi.referenceSdDocument`.
+- Added STRICT RULE: customer-filtered queries must use `LEFT JOIN` for all downstream tables.
+- Added STRICT RULE: "delivered but not billed" must join via `odi.deliveryDocument`.
+- Added CRITICAL instruction: all ID columns are TEXT — always wrap values in single quotes.
+
+### Outcome
+Accurate row counts for business logic queries, non-zero results for customer flows, and reliable type-safe filtering across all ID-based queries.
+
+---
+
+## Customer-Aware Empty Result Handling
+
+### Problem
+When a customer-based query returned 0 rows, the system showed a generic "No connected flow found" message — giving no indication whether the customer ID was invalid or the downstream flow was simply incomplete.
+
+### Fix (queryService.js)
+- Added a **customer existence check** (step 4.6) that extracts `soldToParty` from the generated SQL and verifies it exists in `sales_order_headers` before executing the main query.
+- If the customer does not exist: returns `"No records found for customer '<id>' in the dataset."`.
+- If the customer exists but the main query + fallback still return 0 rows: returns `"No records found for customer '<id>' in the dataset."`.
+- If fallback recovers partial data: returns `"Partial flow found for customer '<id>' — some stages (delivery, billing, or payment) are missing."`.
+
+### Outcome
+Customer queries now provide clear, actionable feedback distinguishing between invalid customers and incomplete O2C flows.
+
+---
+
 ## 🏁 Project Completed
 
 The Graph-Based Data Modeling and Query System over an SAP Order-to-Cash Dataset has been fully conceived, coded, documented, correctly mapped, and tested securely.

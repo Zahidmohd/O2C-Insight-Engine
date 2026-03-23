@@ -162,6 +162,36 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
             console.log(`[API-${requestId}] Check: Billing document '${extractedId}' exists. Proceeding to evaluate flow.`);
         }
 
+        // 4.6. Check if specific customer exists in DB
+        const custMatch = rawSql.match(/soldToParty\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i);
+        let explicitCustChecked = false;
+        let extractedCustId = null;
+
+        if (custMatch && custMatch[1]) {
+            extractedCustId = custMatch[1];
+            explicitCustChecked = true;
+            console.log(`[API-${requestId}] Check: Testing existence of customer '${extractedCustId}'...`);
+
+            const custCheckQuery = `SELECT salesOrder FROM sales_order_headers WHERE soldToParty = '${extractedCustId}' LIMIT 1;`;
+            const custCheckResult = await withTimeout(executeQuery(custCheckQuery), 2000, 'DB Customer Check');
+
+            if (custCheckResult.success && custCheckResult.rowCount === 0) {
+                console.log(`[API-${requestId}] Check: No records for customer '${extractedCustId}'.`);
+                return {
+                    success: true,
+                    summary: `No records found for customer '${extractedCustId}' in the dataset.`,
+                    reason: 'INVALID_ID',
+                    rowCount: 0,
+                    keyFields: [],
+                    executionTimeMs: 0,
+                    generatedSql: rawSql,
+                    data: [],
+                    graph: { nodes: [], edges: [] }
+                };
+            }
+            console.log(`[API-${requestId}] Check: Customer '${extractedCustId}' exists. Proceeding.`);
+        }
+
         // 5. Execute against SQLite with execution timeout
         let dbResult = await withTimeout(executeQuery(rawSql), 5000, 'Database Execution');
 
@@ -221,9 +251,14 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         // Clarify zero rows explicitly (if it STILL is 0 after fallback)
         if (dbResult.rowCount === 0) {
             console.log(`[API-${requestId}] Check: Zero rows returned after fallback routines.`);
-            const emptySummary = explicitIdChecked 
-                ? `The document was found, but no connected flow traversing outbound nodes exists.`
-                : `The query executed correctly, but no matching connected records were found.`;
+            let emptySummary;
+            if (explicitCustChecked) {
+                emptySummary = `No records found for customer '${extractedCustId}' in the dataset.`;
+            } else if (explicitIdChecked) {
+                emptySummary = `The document was found, but no connected flow traversing outbound nodes exists.`;
+            } else {
+                emptySummary = `The query executed correctly, but no matching connected records were found.`;
+            }
 
             return {
                 success: true,
@@ -243,7 +278,11 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         
         if (fallbackApplied) {
             finalResponse.fallbackApplied = true;
-            finalResponse.summary = "Partial flow recovered using relaxed joins";
+            if (explicitCustChecked) {
+                finalResponse.summary = `Partial flow found for customer '${extractedCustId}' — some stages (delivery, billing, or payment) are missing.`;
+            } else {
+                finalResponse.summary = "Partial flow recovered using relaxed joins";
+            }
         }
 
         // Required Final Logging Check 
