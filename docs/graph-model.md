@@ -430,9 +430,19 @@ journal_entry_items_ar.referenceDocument = billing_document_headers.billingDocum
 | **Source Node** | JournalEntry |
 | **Target Node** | Payment |
 | **Direction** | JournalEntry → Payment |
-| **Cardinality** | 1:1 (one invoice clearing = one payment matching) |
+| **Cardinality** | N:M (see note below) |
 | **Business meaning** | "This journal entry (invoice AR line) was cleared by this payment" |
 | **Join granularity** | **Header-level** (via clearing mechanism) |
+
+**Cardinality note:**
+> Modeled as 1:1 for this dataset (our data shows single clearing per document), but designed
+> to support N:M relationships in real-world SAP scenarios:
+> - **1:N** — One invoice cleared by multiple partial payments
+> - **N:1** — One payment clearing multiple invoices in a single clearing run
+> - **1:1** — One invoice fully cleared by one payment (most common in our dataset)
+>
+> The SQL joins and graph traversal logic do NOT assume 1:1. They use JOIN (not scalar lookups),
+> ensuring correctness regardless of cardinality.
 
 **Underlying SQL join:**
 ```sql
@@ -441,12 +451,10 @@ payments_accounts_receivable.accountingDocument = journal_entry_items_ar.account
 AND payments_accounts_receivable.companyCode = journal_entry_items_ar.companyCode
 AND payments_accounts_receivable.fiscalYear = journal_entry_items_ar.fiscalYear
 
--- Path B: Via clearing document linkage
-journal_entry_items_ar.clearingAccountingDocument
-    = payments_accounts_receivable.clearingAccountingDocument
+-- Path B: Via clearing document (links invoice entries to payment entries)
+journal_entry_items_ar.clearingAccountingDocument = payments_accounts_receivable.clearingAccountingDocument
 AND journal_entry_items_ar.companyCode = payments_accounts_receivable.companyCode
-AND journal_entry_items_ar.clearingDocFiscalYear
-    = payments_accounts_receivable.clearingDocFiscalYear
+AND journal_entry_items_ar.clearingDocFiscalYear = payments_accounts_receivable.clearingDocFiscalYear
 ```
 
 **Note:** Path A is preferred for simplicity. Path B is useful when tracing clearing chains.

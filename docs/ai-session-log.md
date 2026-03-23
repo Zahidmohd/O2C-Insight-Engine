@@ -148,10 +148,53 @@ Designed a complete graph model with **8 node types** and **12 edge types**.
 
 ---
 
+## Step 2a: Graph Model Refinement — CLEARED_BY Cardinality
+
+### Prompt
+
+```
+Refine the CLEARED_BY edge (JournalEntry → Payment):
+- Update cardinality from 1:1 to support 1:N, N:1, and N:M in real SAP systems
+- Add documentation note about production-readiness
+- No SQL join changes, no structural changes
+- Documentation + modeling clarity only
+Also: STOP auto-committing. Only suggest commits from now on.
+```
+
+### Response Summary
+
+Updated the `CLEARED_BY` edge in `docs/graph-model.md`:
+
+**Before:**
+- Cardinality: `1:1 (one invoice clearing = one payment matching)`
+
+**After:**
+- Cardinality: `N:M (see note below)` with detailed note explaining:
+  - 1:N — partial payments against one invoice
+  - N:1 — one payment clearing multiple invoices
+  - 1:1 — the typical case in our dataset
+  - SQL joins use JOIN (not scalar lookups) so they work for all cardinalities
+
+No SQL joins were modified. No structural changes made.
+
+### Decision
+
+- Updated cardinality documentation for `CLEARED_BY` edge only
+- Added production-readiness note as a blockquote in the edge definition
+- Adopted new workflow rule: **no auto git commands** — only suggest commits
+
+### Reasoning
+
+1. **Real SAP clearing is N:M** — In production SAP systems, one payment can clear multiple invoices (e.g., a customer pays all outstanding invoices in one wire transfer), and one invoice can be partially paid over time. Documenting this prevents a future developer from assuming 1:1 and introducing bugs.
+2. **No code changes needed** — Our SQL already uses `JOIN` (not `= (SELECT ...)`), so it inherently supports N:M. This is purely a documentation improvement.
+3. **Git discipline** — Manual commits ensure clean, intentional commit history suitable for FDE assignment submission.
+
+---
+
 ## Next Steps
 
-**Step 3:** Join validation with full SQL execution against loaded SQLite database
-**Step 4:** Logical graph modeling implementation
-**Step 5:** SQLite schema design and data loading
+**Step 3:** SQLite schema design and data loading
+**Step 4:** Join validation with full SQL execution against loaded database
+**Step 5:** Architecture design
 
 ---
