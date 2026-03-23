@@ -236,10 +236,47 @@ Designed the SQLite schema and data ingestion strategy, documented in `docs/sche
 
 ---
 
+## Step 4: Database Implementation and Data Loading
+
+### Prompt
+
+```
+Now move to Step 4: Database Implementation and Data Loading.
+1. Create `src/db/connection.js` (sqlite3, foreign_keys=ON)
+2. Create `src/db/init.js` (executes schema.sql)
+3. Create `src/db/loader.js` (JSONL to SQLite, batch 100, wrapping table in TX)
+4. Enforce mandatory critical transformation on `billing_document_items.referenceSdDocumentItem` (padding to 6 digits)
+5. Execute validation queries post-load
+No ORMs, raw SQL only.
+```
+
+### Response Summary
+
+Implemented the database and loading scripts inside `src/db/`. 
+
+- **connection.js**: Established a basic `sqlite3` connection with `PRAGMA foreign_keys = ON;`, wrapped with Promise helpers for cleaner async handling.
+- **init.js**: Loads and executes `schema.sql` (created in Step 3), ensuring tables and indexes are created before loading.
+- **loader.js**: Iterates through all 19 JSONL directories matching the strict loading order. Added data transformation for `billing_document_items.referenceSdDocumentItem` exactly as directed: `val.padStart(6, '0')`.
+- **Validation**: After inserting ~21,393 rows total, the script ran the validation checks:
+  - `paddingCheck`: Confirmed 0 unpadded billing items.
+  - `joinCheck`: Multi-hop query `SalesOrder -> Delivery -> Billing -> Journal` successfully returned **181 rows**, validating the padded join keys and the SQL from the dataset-analysis phase.
+
+### Decision
+
+- Wrote the data ingestion layer specifically as batch insertions within a single SQLite text transaction `BEGIN TRANSACTION ... COMMIT` per table to dramatically speed up inserts.
+- Kept the padding transformation localized to the single configuration object for `billing_document_items` in `loader.js`.
+
+### Reasoning
+
+1. **Transaction Wrapping:** `sqlite3` goes from minutes to milliseconds when processing thousands of sequential `INSERT` statements inside a `BEGIN / COMMIT` boundary, avoiding the disk fsync per row.
+2. **Data Integrity Validations:** Emitting a pass/fail natively at the end of the script builds immediate trust that the schema definition and load strategies correctly harmonize with the data payload structure.
+
+---
+
 ## Next Steps
 
-**Step 4:** Database implementation (building the Node.js loader and running it)
-**Step 5:** Join validation with full SQL execution against loaded database
-**Step 6:** Architecture design
+**Step 5:** Search Architecture & LLM Query Prompt Design
+**Step 6:** API Server implementation
+**Step 7:** Evaluation
 
 ---
