@@ -4,7 +4,7 @@ const db = require('./connection');
 const initDB = require('./init');
 
 const BATCH_SIZE = 100;
-const DATA_DIR = path.resolve(__dirname, '../../');
+const DATA_DIR = path.resolve(__dirname, '../../sap-o2c-data');
 
 const TABLES = [
   { name: 'plants', directory: 'plants', transforms: {} },
