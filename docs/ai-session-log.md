@@ -273,10 +273,50 @@ Implemented the database and loading scripts inside `src/db/`.
 
 ---
 
+## Step 5: Query Engine (Natural Language → SQL → Result)
+
+### Prompt
+
+```
+Now move to Step 5: Query Engine.
+1. Create `src/query/llmClient.js` integrating Groq and OpenRouter fallbacks.
+2. Create `src/query/promptBuilder.js` specifying schema, edge relations, and explicitly instructing simple '=' joins (no padding).
+3. Create `src/query/validator.js` enforcing ONLY SELECT queries on known schema.
+4. Create `src/query/sqlExecutor.js` to execute SQL securely.
+5. Create `src/query/queryService.js` to orchestrate guardrails, LLM calls, validation, DB execution, and formatted response mapping.
+```
+
+### Response Summary
+
+Implemented the full query engine backend inside `src/query/`:
+
+- **llmClient.js**: Orchestrates Graceful Degradation. Attempts to build SQL using `llama-3.1-70b-versatile` on Groq API first. If rate-limited or failed, gracefully falls back to `meta-llama/llama-3.1-70b-instruct` on OpenRouter.
+- **promptBuilder.js**: Built the LLM system prompt. Explicitly provided the tested graph relationships (e.g. `FULFILLED_BY`, `BILLED_AS`). Included the *CRITICAL NOTE* preventing the LLM from attempting to format/pad strings using `printf()` in SQL.
+- **validator.js**: Implemented an explicit SQL blocklist rejecting `DELETE`, `UPDATE`, `DROP`, `INSERT`, `PRAGMA`. Enforces `SELECT` queries strictly. Blocks database reflection attempts (`sqlite_`, `load_extension`).
+- **sqlExecutor.js**: Executes dynamically generated queries tracking precise execution times (`process.hrtime()`) and resolving rows via the existing `sqlite3` connection layer.
+- **queryService.js**: Orchestrates the entire pipeline from incoming raw text to data response execution:
+    1. Guardrail validation ensuring text aligns with SAP O2C topics.
+    2. Prompt Generation.
+    3. LLM SQL inference.
+    4. Safety validation on the string.
+    5. Database execution.
+    6. Response packaging (rowCount, executionTime, raw SQL, result).
+
+### Decision
+
+- Designed `isDomainQuery` as a lightweight static heuristic keyword filter to fail-fast if external questions (e.g., "What is the capital of France?") are asked, saving on token generation costs.
+- Kept the prompt schema strictly aligned with the exact tables and columns generated during Step 3, stripping irrelevant auxiliary data out of context to improve inference accuracy.
+
+### Reasoning
+
+1. **Deterministic Safety over AI Intelligence:** Even if the LLM produces a destructive command (`DROP TABLE`), the `validator.js` layer statically catches and blocks it prior to any DBMS evaluation.
+2. **Robustness:** Integrating multiple upstream API endpoints (Groq + OpenRouter) for Open-Source models guarantees high development velocity without vendor-locking into a single endpoint provider that may experience outages.
+
+---
+
 ## Next Steps
 
-**Step 5:** Search Architecture & LLM Query Prompt Design
-**Step 6:** API Server implementation
-**Step 7:** Evaluation
+**Step 6:** API endpoint deployment (Express Server)
+**Step 7:** Frontend Integration Planning
 
 ---
