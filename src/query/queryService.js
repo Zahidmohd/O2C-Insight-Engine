@@ -10,22 +10,52 @@ const { executeQuery } = require('./sqlExecutor');
 function isDomainQuery(query) {
     const queryLower = query.toLowerCase();
     
-    // Simple heuristic domain guardrail
-    const keywords = [
+    // Improved Domain Guardrail List
+    const mandatoryDomainKeywords = [
         'order', 'sales', 'delivery', 'bill', 'invoice', 
         'journal', 'payment', 'customer', 'product', 'plant',
-        'document', 'item', 'amount', 'clearing', 'flow'
+        'document', 'item', 'amount', 'clearing', 'flow',
+        'company', 'fiscal', 'accounting', 'partner'
     ];
     
-    const containsKeyword = keywords.some(kw => queryLower.includes(kw));
+    // Check if query contains at least one domain keyword
+    const matchedKeywords = mandatoryDomainKeywords.filter(kw => queryLower.includes(kw));
 
-    if (!containsKeyword) {
+    if (matchedKeywords.length === 0) {
         return {
             valid: false,
-            message: "This system is designed to answer questions related to the provided dataset only (SAP Order-to-Cash, Customers, Products, Payments)."
+            message: "This system is designed to answer questions related to the provided dataset only (e.g., SAP Order-to-Cash, Customers, Products, Payments)."
         };
     }
     return { valid: true };
+}
+
+/**
+ * Appends a LIMIT to queries that lack them to protect performance
+ */
+function enforceLimit(sql) {
+    // Basic regex check if LIMIT exists regardless of spacing/casing
+    const hasLimit = /LIMIT\s+\d+/i.test(sql);
+    if (!hasLimit) {
+        // Find trailing semicolons and append LIMIT before it if needed
+        let cleanSql = sql.trim();
+        if (cleanSql.endsWith(';')) cleanSql = cleanSql.slice(0, -1);
+        return cleanSql + '\nLIMIT 100;';
+    }
+    return sql;
+}
+
+/**
+ * Promise wrapper to add execution timeout protection
+ */
+function withTimeout(promise, ms, operationName) {
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+            reject(new Error(`Timeout: ${operationName} exceeded ${ms}ms limit.`));
+        }, ms);
+    });
+    return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 }
 
 /**
@@ -74,20 +104,26 @@ async function processQuery(naturalLanguageQuery) {
     const prompt = buildPrompt(naturalLanguageQuery);
 
     try {
-        // 3. Generate SQL from LLM
-        const rawSql = await getSqlFromLLM(prompt);
+        // 3. Generate SQL from LLM with timeout protection
+        const generatedSql = await withTimeout(getSqlFromLLM(prompt), 15000, 'LLM Generation');
+        
+        // Ensure LIMIT 100 explicitly
+        const rawSql = enforceLimit(generatedSql);
+        
         console.log(`[QueryService] Generated SQL:\n${rawSql}\n`);
 
         // 4. Validate output
         validateSql(rawSql); // Throws Error if unsafe
 
-        // 5. Execute against SQLite
-        const dbResult = await executeQuery(rawSql);
+        // 5. Execute against SQLite with execution timeout
+        const dbResult = await withTimeout(executeQuery(rawSql), 5000, 'Database Execution');
 
         if (!dbResult.success) {
              console.error(`[QueryService] SQL Error: ${dbResult.error}`);
              return { error: 'Failed to execute query safely', message: dbResult.error, sql: rawSql };
         }
+
+        console.log(`[QueryService] Success: ${dbResult.rowCount} rows fetched in ${dbResult.executionTimeMs}ms`);
 
         // 6. Format structurally backed result
         const finalResponse = formatResponse(dbResult, rawSql);

@@ -314,9 +314,44 @@ Implemented the full query engine backend inside `src/query/`:
 
 ---
 
+## Step 6: API Layer (Expose Query Engine via Express)
+
+### Prompt
+
+```
+Now move to Step 6: API Layer (Expose Query Engine via Express).
+1. Create `src/server.js` (Express + CORS + Request Logging).
+2. Create `src/routes/queryRoutes.js` (POST `/query`).
+3. Add input validation (reject empty, max 500 chars).
+4. Add response formatting (`success`, `query`, `sql`, `rowCount`, `data`, `executionTimeMs`).
+5. Enforce LIMIT on generated SQL, LLM sanitization mapping, query timeout protection, robust domain heuristics.
+```
+
+### Response Summary
+
+Exposed the query engine via a structured REST API layer:
+
+- **Express Configuration (`server.js`)**: Connected standard middleware (`express.json`, `cors`) and an error-handling boundary. Established request logging.
+- **Route Controller (`queryRoutes.js`)**: Exported the `POST /api/query` route. Handles physical input validation (rejecting `null`, empty, and `> 500 characters`). Matches the exact requested response JSON mapping.
+- **Service Upgrades (`queryService.js`)**:
+  - *Domain Guardrails:* Substantially robustified `isDomainQuery` with a broader, more strict array filter (`mandatoryDomainKeywords`).
+  - *`LIMIT` Enforcement:* Created `enforceLimit(sql)` to inject `LIMIT 100` dynamically at the end of output SQL strings if they lack pagination constraints.
+  - *Timeout Protection:* Engineered a structural `Promise.race()` timeout wrapper targeting `generateSqlWithGroq` (LLM max wait 15s) and `db.allAsync` (SQLite execution max wait 5s).
+
+### Decision
+
+- Did not introduce external heavy pagination libraries. `LIMIT 100` is securely evaluated using RegEx and string appending as an elegant fail-safe protecting downstream browser performance.
+- Decoupled API framework logic (Express) completely from Engine business logic (`queryService`), preventing messy tight coupling.
+
+### Reasoning
+
+1. **Denial of Service Prevention:** The 500-character string payload limit + 5000ms database timeout limit aggressively mitigates database CPU spikes or maliciously heavy cross-joins traversing millions of combinations.
+2. **Deterministic Payload Guarantee:** Always returning an array structure (`data: []`) with metadata guarantees that UI component developers evaluating the API mapping can handle arrays identically, no matter the query outcome.
+
+---
+
 ## Next Steps
 
-**Step 6:** API endpoint deployment (Express Server)
-**Step 7:** Frontend Integration Planning
+**Step 7:** Frontend application (React + Cytoscape) mapping to the database API layer.
 
 ---
