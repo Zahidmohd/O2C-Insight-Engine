@@ -191,10 +191,55 @@ No SQL joins were modified. No structural changes made.
 
 ---
 
+## Step 3: SQLite Schema Design & Data Loading Strategy
+
+### Prompt
+
+```
+Now move to Step 3: SQLite Schema Design and Data Loading Strategy.
+1. Define SQLite tables (keep close to source, no merging)
+2. Define columns, primary keys, and index strategy (crucial for joins)
+3. Handle special cases (billing item padding, composite keys, nulls)
+4. Design a Node.js data loading script (JSONL → SQLite)
+5. Keep it simple, correct, and query-friendly
+Output: CREATE statements, index statements, loading plan.
+```
+
+### Response Summary
+
+Designed the SQLite schema and data ingestion strategy, documented in `docs/schema-design.md`.
+
+**Schema Decisions:**
+- Created 19 separate table definitions, matching the JSONL structure.
+- All columns typed as `TEXT` to preserve SAP identifiers (including leading zeros).
+- Defined composite primary keys where required (e.g., `companyCode`, `fiscalYear`, `accountingDocument`).
+- Defined 18 critical indexes specifically targeting the validated graph edges (e.g., `referenceSdDocument`).
+
+**Critical Special Case Resolution:**
+- **Padding:** Resolved the billing item padding issue by normalizing `billing_document_items.referenceSdDocumentItem` (padding to 6 digits) **during data ingestion**, rather than relying on `printf` at query time.
+
+**Data Loading Strategy:**
+- Designed a batch-loading approach (100 rows per batch) wrapping each table's inserts in a single transaction for maximum performance.
+- Established a strict loading order to respect referential integrity (Master Data first, then O2C nodes in sequence).
+- Designed a `_schema_metadata` table to explicitly provide the LLM with context on which columns connect to which tables.
+
+### Decision
+
+- Created `docs/schema-design.md` with full SQL definitions and the ingestion plan.
+- Chose load-time normalization over query-time for the padding issue.
+
+### Reasoning
+
+1. **LLM Friendliness:** Normalizing the billing item padding at load time is a massive simplification for the LLM. It can now generate clean `a.item = b.item` joins without needing to know SAP-specific string formatting quirks. It also allows indexes to work uniformly.
+2. **TEXT Data Types:** SAP keys frequently look like numbers (`"740506"`, `"000010"`) but are identifiers where leading zeros are semantic. Storing them as REAL or INTEGER in SQLite causes silent corruption when zeros are stripped.
+3. **Indexes:** Added composite indexes specifically for the document reference joins (e.g., `referenceSdDocument`, `referenceSdDocumentItem`) to ensure multi-hop traversal is performant.
+
+---
+
 ## Next Steps
 
-**Step 3:** SQLite schema design and data loading
-**Step 4:** Join validation with full SQL execution against loaded database
-**Step 5:** Architecture design
+**Step 4:** Database implementation (building the Node.js loader and running it)
+**Step 5:** Join validation with full SQL execution against loaded database
+**Step 6:** Architecture design
 
 ---
