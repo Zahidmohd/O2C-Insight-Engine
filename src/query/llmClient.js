@@ -14,7 +14,7 @@ async function generateSqlWithGroq(prompt) {
     // Choose the best reasoning / coding model on Groq
     const completion = await groq.chat.completions.create({
         messages: [{ role: 'user', content: prompt }],
-        model: 'llama-3.1-70b-versatile',
+        model: 'llama-3.3-70b-versatile',
         temperature: 0,
         max_tokens: 500
     });

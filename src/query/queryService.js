@@ -2,6 +2,7 @@ const { buildPrompt } = require('./promptBuilder');
 const { getSqlFromLLM } = require('./llmClient');
 const { validateSql } = require('./validator');
 const { executeQuery } = require('./sqlExecutor');
+const { extractGraph } = require('./graphExtractor');
 
 /**
  * Validates domain safety before spending API tokens
@@ -62,38 +63,46 @@ function withTimeout(promise, ms, operationName) {
  * Formats the final structural response output
  */
 function formatResponse(result, rawSql) {
-    // Determine summary based on row count
+    // Truncate to max 100 rows for payload efficiency
+    const MAX_ROWS = 100;
+    const isTruncated = result.rows.length > MAX_ROWS;
+    const finalRows = isTruncated ? result.rows.slice(0, MAX_ROWS) : result.rows;
+
     let summary = `Query returned ${result.rowCount} row(s) in ${result.executionTimeMs}ms.`;
-    
     if (result.rowCount === 0) {
         summary = `No records found matching your query in the dataset. Execution took ${result.executionTimeMs}ms.`;
+    } else if (isTruncated) {
+        summary = `Query returned ${result.rowCount} row(s). Truncated payload to ${MAX_ROWS} rows for wire performance. Execution took ${result.executionTimeMs}ms.`;
     }
 
-    // Capture column headers from the first row if available
-    const keyFields = result.rows && result.rows.length > 0 
-        ? Object.keys(result.rows[0])
+    const keyFields = finalRows && finalRows.length > 0 
+        ? Object.keys(finalRows[0])
         : [];
+
+    // Map rows mapping structural identifiers down to array graphs
+    const graphData = extractGraph(finalRows);
 
     return {
         summary: summary,
-        rowCount: result.rowCount,
+        rowCount: result.rowCount, // real count regardless of payload truncation
         keyFields: keyFields,
         executionTimeMs: result.executionTimeMs,
         generatedSql: rawSql,
-        data: result.rows
+        data: finalRows, // actual sliced data bounded effectively
+        graph: graphData
     };
 }
 
 /**
  * Orchestrates the full Natural Language -> SQL -> Result pipeline
  */
-async function processQuery(naturalLanguageQuery) {
-    console.log(`\n[QueryService] Processing: "${naturalLanguageQuery}"`);
+async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
+    console.log(`\n[API-${requestId}] Query Service Evaluation: "${naturalLanguageQuery}"`);
 
     // 1. Guardrails
     const domainCheck = isDomainQuery(naturalLanguageQuery);
     if (!domainCheck.valid) {
-        console.warn(`[QueryService] Domain Check Failed`);
+        console.warn(`[API-${requestId}] Domain Check Failed / Guardrail Prevented Engine Spawn`);
         return {
             error: domainCheck.message,
             query: naturalLanguageQuery
@@ -110,7 +119,7 @@ async function processQuery(naturalLanguageQuery) {
         // Ensure LIMIT 100 explicitly
         const rawSql = enforceLimit(generatedSql);
         
-        console.log(`[QueryService] Generated SQL:\n${rawSql}\n`);
+        console.log(`[API-${requestId}] Engine Generated SQL:\n${rawSql}\n`);
 
         // 4. Validate output
         validateSql(rawSql); // Throws Error if unsafe
@@ -119,18 +128,18 @@ async function processQuery(naturalLanguageQuery) {
         const dbResult = await withTimeout(executeQuery(rawSql), 5000, 'Database Execution');
 
         if (!dbResult.success) {
-             console.error(`[QueryService] SQL Error: ${dbResult.error}`);
+             console.error(`[API-${requestId}] execution evaluation Error boundary trigger: ${dbResult.error}`);
              return { error: 'Failed to execute query safely', message: dbResult.error, sql: rawSql };
         }
 
-        console.log(`[QueryService] Success: ${dbResult.rowCount} rows fetched in ${dbResult.executionTimeMs}ms`);
+        console.log(`[API-${requestId}] Success bounds: ${dbResult.rowCount} payload fetched in ${dbResult.executionTimeMs}ms`);
 
         // 6. Format structurally backed result
         const finalResponse = formatResponse(dbResult, rawSql);
         return finalResponse;
 
     } catch (e) {
-         console.error(`[QueryService] Pipeline Failure:`, e.message);
+         console.error(`[API-${requestId}] Pipeline Failure caught:`, e.message);
          return {
              error: e.message,
              query: naturalLanguageQuery
