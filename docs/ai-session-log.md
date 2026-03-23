@@ -387,9 +387,62 @@ Implemented the graph visualization serialization engine:
 
 ---
 
-## Next Steps
+## Step 8: Frontend Implementation using provided UI design
 
-**Step 8:** Construct React Frontend (Vite)
-**Step 9:** Connect Cytoscape.js Interface
+### Prompt
+
+```
+Now move to Step 8: Frontend Implementation using provided UI design.
+1. Build a minimal React frontend using Vite.
+2. Left Panel: input box, submit button, query + response info metadata map.
+3. Right Panel: Cytoscape graph rendering.
+4. Implement API connection clearing previous graphs, loading states, avoiding duplicates, and error handling.
+```
+
+### Response Summary
+
+Constructed the React UI Layer accurately mirroring the provided wireframe structure rules:
+
+- **Technology Stack (`frontend/`)**: Initialized a new root `Vite + React` application installing `axios` for standard fetch resolution and `cytoscape` for interactive canvas visualizations.
+- **Layout Architecture (`App.jsx` & `App.css`)**:
+  - *Left Sidebar*: Fixed-width column embedding the query `textarea`. Employs standard form validation (disabling submission if empty or loading) and catches exact `.catch()` boundaries mapping cleanly to UI error blocks.
+  - *Metadata Panel*: Safely renders out `query`, `requestId`, `rowCount`, and computationally formatted numeric `executionTimeMs` upon successful API returns.
+  - *Right Canvas*: A fluid `flex: 1` relative container mounting the core Cytoscape rendering engine.
+- **Graph Lifecycle (`cyRef`)**:
+  - Bound generic cleanups triggering `cyRef.current.destroy()` immediately upon new queries and during standard `useEffect` React unmount lifecycles, guaranteeing zero stale-graph memory leaks across transitions.
+  - Supplied distinct node coloring profiles mapping precisely back to Step 1 & 2 Node Types definitions (SalesOrders = Green, Billing = Red, Payments = Purple).
+
+### Decision
+
+- Ignored complex UI suites (like Material-UI or Tailwind CSS) ensuring zero overhead or over-engineering logic matching the exact constraint rules specified. `App.css` handles the entire fluid dual-pane design concisely.
+- Deployed Cytoscape using the generic `cose` layout algorithm. This physics-simulation automatically spreads complex arbitrary network clusters dynamically without manual hardcoded X/Y coordinates.
+
+### Reasoning
+
+- Adhering locally to purely Native React hooks with `cyRef` avoids complicated wrapper libraries (`react-cytoscapejs`), granting total underlying access to standard DOM-level network simulations.
 
 ---
+
+## Step 9: Final README Documentation
+
+### Prompt
+
+```
+Now move to Step 9: Final README Documentation.
+Write a professional, production-quality README.md that clearly explains the system, design decisions, and engineering tradeoffs. 
+Explicitly outline SQLite constraints, LLM mapping limits, frontend loading architecture bounds and clear node lifecycle mappings explicitly documenting 13-stage steps successfully executed.
+```
+
+### Response Summary
+
+Drafted a clean, production-level `README.md` at the root of the project detailing the entire end-to-end framework. 
+
+- **Architectural Flow Definitions:** Traced out `User -> LLM -> SQLite -> UI mapping`.
+- **Engineering Design Documentations (Frontend + Backend):** Highlighted the critical usage of static Node definitions preventing UI Cytoscape rendering loops via `<cy.destroy()>` triggers. Noted the `Execution Timeout` metrics, max-width string bindings, and limits mitigating SQL reflection attacks. Explored explicit rationale for migrating custom pre-padded strings to bypass complex string formatting execution within simple SQLite boundaries. 
+- **AI Iteration Details:** Discussed exactly how LLM Prompt engineering progressed over the build stages, specifying explicitly that the generic open source LLM model generated queries mapping ONLY to standard structure definitions and didn't construct the actual response rows directly, safely preventing "hallucinations" of source factual data.
+
+---
+
+## 🏁 Project Completed
+
+The Graph-Based Data Modeling and Query System over an SAP Order-to-Cash Dataset has been fully conceived, coded, documented, correctly mapped, and tested securely.

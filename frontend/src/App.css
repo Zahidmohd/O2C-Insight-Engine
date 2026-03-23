@@ -1,0 +1,149 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body, html {
+  height: 100%;
+  width: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: #f8f9fa;
+}
+
+.app-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* LEFT PANEL */
+.left-panel {
+  width: 350px;
+  background-color: #ffffff;
+  border-right: 1px solid #e0e0e0;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.05);
+  z-index: 10;
+  overflow-y: auto;
+}
+
+.title {
+  font-size: 1.25rem;
+  color: #333;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.search-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 100px;
+  padding: 12px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 14px;
+  resize: vertical;
+  background-color: #fbfbfb;
+  transition: border-color 0.2s;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: #0052cc;
+  background-color: #fff;
+}
+
+button {
+  background-color: #0052cc;
+  color: white;
+  border: none;
+  padding: 12px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+button:hover:not(:disabled) {
+  background-color: #0043a6;
+}
+
+button:disabled {
+  background-color: #a0bdec;
+  cursor: not-allowed;
+}
+
+.error-box {
+  background-color: #ffeaea;
+  color: #d32f2f;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  border: 1px solid #ffcdd2;
+}
+
+.result-info {
+  background-color: #f4f6f8;
+  padding: 16px;
+  border-radius: 6px;
+  border: 1px solid #e1e4e8;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.result-info h3 {
+  font-size: 14px;
+  color: #24292e;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #e1e4e8;
+  padding-bottom: 8px;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.info-item .label {
+  font-weight: 600;
+  color: #586069;
+  margin-bottom: 2px;
+}
+
+.info-item .val {
+  color: #24292e;
+}
+
+.empty-state {
+  text-align: center;
+  color: #6a737d;
+  font-size: 14px;
+  margin-top: 20px;
+}
+
+/* RIGHT PANEL */
+.right-panel {
+  flex: 1;
+  position: relative;
+  background-color: #fafbfc;
+}
+
+.cy-container {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
