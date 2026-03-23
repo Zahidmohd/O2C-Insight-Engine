@@ -70,6 +70,7 @@ The database is SQLite. Do NOT use MySQL, PostgreSQL, or SQL Server specific syn
 - Do not make up tables. Use only the provided schema.
 - Try to answer the user's question as accurately and simply as possible.
 - CRITICAL: All ID columns (salesOrder, billingDocument, deliveryDocument, soldToParty, customer, businessPartner) are TEXT type. Always wrap filter values in single quotes. Example: WHERE soldToParty = '100017', NOT WHERE soldToParty = 100017.
+- STRICT RULE: billingDocumentIsCancelled is a numeric flag (0 or 1). For cancelled documents, always use \`billingDocumentIsCancelled = 1\`. Never use 'X', 'true', or other strings.
 `;
 
 function buildPrompt(userQuery) {

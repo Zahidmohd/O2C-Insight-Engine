@@ -665,6 +665,19 @@ Customer queries now provide clear, actionable feedback distinguishing between i
 
 ---
 
+## Fix: Cancelled Billing Flag Handling
+
+### Problem
+When users queried for cancelled billing documents, the LLM defaulted to standard SAP string-based flags (e.g. `WHERE billingDocumentIsCancelled = 'X'`). Since SQLite evaluated this field natively as a numeric byte during ingestion (0=Active, 1=Cancelled), the strings failed silently returning zero rows. 
+
+### Fix (promptBuilder.js)
+- Explicitly documented a new STRICT RULE into the schema parsing context enforcing the mathematical boolean representation: "For cancelled documents, always use `billingDocumentIsCancelled = 1`. Never use 'X', 'true', or other strings."
+
+### Outcome
+Cancellations natively map to accurate `bdi -> odi -> soh` traversal networks correctly extracting reversed graph associations evaluating securely.
+
+---
+
 ## 🏁 Project Completed
 
 The Graph-Based Data Modeling and Query System over an SAP Order-to-Cash Dataset has been fully conceived, coded, documented, correctly mapped, and tested securely.
