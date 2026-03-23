@@ -16,7 +16,7 @@ async function generateSqlWithGroq(prompt) {
         messages: [{ role: 'user', content: prompt }],
         model: 'llama-3.3-70b-versatile',
         temperature: 0,
-        max_tokens: 500
+        max_tokens: 1500
     });
 
     let sql = completion.choices[0]?.message?.content || "";
@@ -41,7 +41,7 @@ async function generateSqlWithOpenRouter(prompt) {
             model: 'meta-llama/llama-3.1-70b-instruct',
             messages: [{ role: 'user', content: prompt }],
             temperature: 0,
-            max_tokens: 500
+            max_tokens: 1500
         })
     });
 

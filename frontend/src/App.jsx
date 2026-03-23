@@ -40,7 +40,7 @@ function App() {
 
     try {
       const response = await axios.post('http://localhost:3000/api/query', { query });
-      const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph } = response.data;
+      const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary } = response.data;
       
       if (success) {
         setResultInfo({
@@ -48,7 +48,10 @@ function App() {
           query: reqQuery,
           rowCount,
           executionTimeMs: Number(executionTimeMs).toFixed(2),
-          hasNodes: graph && graph.nodes && graph.nodes.length > 0
+          hasNodes: graph && graph.nodes && graph.nodes.length > 0,
+          reason,
+          suggestions,
+          summary
         });
 
         // Initialize Cytoscape
@@ -207,8 +210,38 @@ function App() {
       <div className="right-panel">
         <div ref={cyContainerRef} className="cy-container" />
         {resultInfo && !resultInfo.hasNodes && (
-           <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontSize: '18px', fontWeight: '500', color: '#6a737d' }}>
-               No graph data available
+           <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontSize: '18px', fontWeight: '500', color: '#6a737d', textAlign: 'center', backgroundColor: '#fff', padding: '24px', borderRadius: '8px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}>
+               {resultInfo.reason === 'INVALID_ID' ? (
+                   <>
+                       <div style={{ color: '#d32f2f', marginBottom: '8px' }}>Billing document not found...</div>
+                       <div style={{ fontSize: '14px', marginBottom: '16px' }}>{resultInfo.summary}</div>
+                       {resultInfo.suggestions && resultInfo.suggestions.length > 0 && (
+                           <div style={{ fontSize: '14px', borderTop: '1px solid #eee', paddingTop: '12px' }}>
+                               <span style={{ display: 'block', marginBottom: '8px' }}>Try one of these valid examples:</span>
+                               <ul style={{ listStyle: 'none', padding: 0, display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                   {resultInfo.suggestions.map(s => (
+                                       <li key={s}>
+                                           <button 
+                                             type="button"
+                                             onClick={() => setQuery(`Trace full flow for billing document ${s}`)} 
+                                             style={{ padding: '6px 10px', fontSize: '13px', cursor: 'pointer', backgroundColor: '#f0f5ff', color: '#0052cc', borderRadius: '4px', border: '1px solid #adc2eb' }}
+                                           >
+                                             {s}
+                                           </button>
+                                       </li>
+                                   ))}
+                               </ul>
+                           </div>
+                       )}
+                   </>
+               ) : resultInfo.reason === 'NO_FLOW' ? (
+                   <>
+                       <div style={{ color: '#f57c00', marginBottom: '8px' }}>No connected flow found...</div>
+                       <div style={{ fontSize: '14px' }}>{resultInfo.summary}</div>
+                   </>
+               ) : (
+                   <div>No graph data available</div>
+               )}
            </div>
         )}
       </div>

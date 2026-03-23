@@ -17,7 +17,14 @@ const TABLES = [
   { name: 'product_plants', directory: 'product_plants', transforms: {} },
   { name: 'product_storage_locations', directory: 'product_storage_locations', transforms: {} },
   { name: 'sales_order_headers', directory: 'sales_order_headers', transforms: {} },
-  { name: 'sales_order_items', directory: 'sales_order_items', transforms: {} },
+  { 
+    name: 'sales_order_items', 
+    directory: 'sales_order_items', 
+    transforms: {
+      // ⚠️ CRITICAL: Pad to 6 digits to match delivery documents reference items
+      salesOrderItem: (val) => (typeof val === 'string' && val ? val.padStart(6, '0') : val)
+    } 
+  },
   { name: 'sales_order_schedule_lines', directory: 'sales_order_schedule_lines', transforms: {} },
   { name: 'outbound_delivery_headers', directory: 'outbound_delivery_headers', transforms: {} },
   { name: 'outbound_delivery_items', directory: 'outbound_delivery_items', transforms: {} },

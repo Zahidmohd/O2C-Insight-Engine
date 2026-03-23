@@ -26,29 +26,36 @@ The database is SQLite. Do NOT use MySQL, PostgreSQL, or SQL Server specific syn
 
 1. Sales Order to Delivery (FULFILLED_BY):
    JOIN outbound_delivery_items odi 
-     ON odi.referenceSdDocument = so_items.salesOrder 
-    AND odi.referenceSdDocumentItem = so_items.salesOrderItem
+     ON odi.referenceSdDocument = soh.salesOrder 
+
+   *CONDITIONAL:* If explicitly asked for product/item-level sales order fields, only then add:
+   JOIN sales_order_items so_items 
+     ON so_items.salesOrder = odi.referenceSdDocument 
+    AND so_items.salesOrderItem = odi.referenceSdDocumentItem
 
 2. Delivery to Billing (BILLED_AS):
    JOIN billing_document_items bdi 
      ON bdi.referenceSdDocument = odi.deliveryDocument
     AND bdi.referenceSdDocumentItem = odi.deliveryDocumentItem
-   *CRITICAL NOTE: Do NOT use printf() or padding in SQL for this join. 
-    The padding mismatch was safely resolved during data ingestion!*
 
 3. Billing to Journal Entry (POSTED_AS):
-   JOIN journal_entry_items_accounts_receivable je 
+   LEFT JOIN journal_entry_items_accounts_receivable je 
      ON je.accountingDocument = bdh.accountingDocument
     AND je.companyCode = bdh.companyCode
     AND je.fiscalYear = bdh.fiscalYear
 
 4. Journal Entry to Payment (CLEARED_BY):
-   JOIN payments_accounts_receivable pay 
+   LEFT JOIN payments_accounts_receivable pay 
      ON pay.clearingAccountingDocument = je.clearingAccountingDocument
     AND pay.companyCode = je.companyCode
 
 5. Documents to Customer:
    JOIN business_partners bp ON bp.customer = [table].soldToParty (or customer)
+
+--- JOIN STRATEGY RULES ---
+- PREFER header-level joins when possible (e.g., sales_order_headers -> outbound_delivery_headers -> billing_document_headers).
+- Use item-level joins ONLY when explicitly necessary to extract specific material or quantity data.
+- Avoid unnecessary joins to sales_order_items unless item-level granularity is literally requested.
 
 --- INSTRUCTIONS ---
 - Respond with standard SQLite SQL ONLY.

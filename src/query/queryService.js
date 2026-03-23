@@ -126,8 +126,44 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         // 4. Validate output
         validateSql(rawSql); // Throws Error if unsafe
 
+        // 4.5. Check if specific billing document exists in DB
+        const idMatch = rawSql.match(/billingDocument\s*(?:=|LIKE)\s*['"](\d+)['"]/i);
+        let explicitIdChecked = false;
+        
+        if (idMatch && idMatch[1]) {
+            const extractedId = idMatch[1];
+            explicitIdChecked = true;
+            console.log(`[API-${requestId}] Check: Testing existence of billing document '${extractedId}'...`);
+            
+            const checkQuery = `SELECT billingDocument FROM billing_document_headers WHERE billingDocument = '${extractedId}' LIMIT 1;`;
+            const checkResult = await withTimeout(executeQuery(checkQuery), 2000, 'DB Existence Check');
+            
+            if (checkResult.success && checkResult.rowCount === 0) {
+                console.log(`[API-${requestId}] Check: Invalid billing ID detected: ${extractedId}`);
+                
+                // Fetch ~5 valid samples
+                const sampleQuery = `SELECT billingDocument FROM billing_document_headers LIMIT 5;`;
+                const sampleResult = await withTimeout(executeQuery(sampleQuery), 2000, 'DB Samples Fetch');
+                const suggestions = sampleResult.success ? sampleResult.rows.map(r => r.billingDocument) : [];
+                
+                return {
+                    success: true,
+                    summary: `Billing document '${extractedId}' was not found in the dataset.`,
+                    reason: 'INVALID_ID',
+                    suggestions: suggestions,
+                    rowCount: 0,
+                    keyFields: [],
+                    executionTimeMs: 0,
+                    generatedSql: rawSql,
+                    data: [],
+                    graph: { nodes: [], edges: [] }
+                };
+            }
+            console.log(`[API-${requestId}] Check: Billing document '${extractedId}' exists. Proceeding to evaluate flow.`);
+        }
+
         // 5. Execute against SQLite with execution timeout
-        const dbResult = await withTimeout(executeQuery(rawSql), 5000, 'Database Execution');
+        let dbResult = await withTimeout(executeQuery(rawSql), 5000, 'Database Execution');
 
         if (!dbResult.success) {
              console.error(`[API-${requestId}] execution evaluation Error boundary trigger:`, dbResult.error);
@@ -138,7 +174,50 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
              };
         }
 
+        // NEW: Fallback join relaxation (silent retry)
+        // If query executed but returned 0 rows, relax all strict JOINs down to LEFT JOIN
+        // to natively recover and map partial graph pipelines automatically.
+        if (dbResult.rowCount === 0 && rawSql.match(/\bJOIN\b/gi)) {
+            console.log(`[API-${requestId}] Check: Zero rows returned. Attempting silent relaxed retry (LEFT JOIN fallback)...`);
+            
+            let relaxedSql = rawSql;
+            relaxedSql = relaxedSql.replace(/\bINNER\s+JOIN\b/gi, 'JOIN'); // Normalize first
+            relaxedSql = relaxedSql.replace(/\bJOIN\b/gi, 'LEFT JOIN');
+            // Clean up accidental overwrites logically
+            relaxedSql = relaxedSql.replace(/\bLEFT\s+LEFT\s+JOIN\b/gi, 'LEFT JOIN');
+            relaxedSql = relaxedSql.replace(/\bRIGHT\s+LEFT\s+JOIN\b/gi, 'RIGHT JOIN');
+            relaxedSql = relaxedSql.replace(/\bFULL\s+LEFT\s+JOIN\b/gi, 'FULL JOIN');
+            relaxedSql = relaxedSql.replace(/\bCROSS\s+LEFT\s+JOIN\b/gi, 'CROSS JOIN');
+
+            const relaxedDbResult = await withTimeout(executeQuery(relaxedSql), 5000, 'Database Execution Fallback');
+            if (relaxedDbResult.success && relaxedDbResult.rowCount > 0) {
+                console.log(`[API-${requestId}] Check: Fallback successful! Fetched ${relaxedDbResult.rowCount} rows via relaxed boundary graphs.`);
+                dbResult = relaxedDbResult;
+                rawSql = relaxedSql;
+            }
+        }
+
         console.log(`[API-${requestId}] Success bounds: ${dbResult.rowCount} payload fetched in ${dbResult.executionTimeMs}ms`);
+
+        // Clarify zero rows explicitly (if it STILL is 0 after fallback)
+        if (dbResult.rowCount === 0) {
+            console.log(`[API-${requestId}] Check: Zero rows returned after fallback routines.`);
+            const emptySummary = explicitIdChecked 
+                ? `The document was found, but no connected flow traversing outbound nodes exists.`
+                : `The query executed correctly, but no matching connected records were found.`;
+
+            return {
+                success: true,
+                summary: emptySummary,
+                reason: 'NO_FLOW',
+                rowCount: 0,
+                keyFields: [],
+                executionTimeMs: Number(dbResult.executionTimeMs),
+                generatedSql: rawSql,
+                data: [],
+                graph: { nodes: [], edges: [] }
+            };
+        }
 
         // 6. Format structurally backed result
         const finalResponse = formatResponse(dbResult, rawSql);
