@@ -102,9 +102,11 @@ function extractGraph(rows) {
             addEdge(`SO_${row.referenceSdDocument}`, `DEL_${row.deliveryDocument}`, 'FULFILLED_BY');
         }
 
-        // BILLED_AS (Delivery -> Billing)
+        // BILLED_AS (Delivery -> Billing) or BILLED_DIRECTLY (SalesOrder -> Billing)
         if (row.deliveryDocument && row.billingDocument) {
             addEdge(`DEL_${row.deliveryDocument}`, `BILL_${row.billingDocument}`, 'BILLED_AS');
+        } else if (row.salesOrder && row.billingDocument && !row.deliveryDocument) {
+            addEdge(`SO_${row.salesOrder}`, `BILL_${row.billingDocument}`, 'BILLED_DIRECTLY');
         }
 
         // POSTED_AS (Billing -> Journal Entry)

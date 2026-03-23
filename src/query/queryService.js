@@ -26,7 +26,6 @@ function isIntentValid(query) {
     return { valid: true };
 }
 
-/**
 function isDomainQuery(query) {
     const queryLower = query.toLowerCase();
     

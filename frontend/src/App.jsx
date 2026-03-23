@@ -278,7 +278,7 @@ function App() {
             padding: '16px',
             width: '320px',
             zIndex: 1000,
-            pointerEvents: 'none'
+            pointerEvents: 'auto'
           }}>
             <h4 style={{ margin: '0 0 12px 0', color: '#333', fontSize: '15px' }}>{selectedNode.data.type || 'Entity Details'}</h4>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '400px', overflowY: 'auto' }}>
