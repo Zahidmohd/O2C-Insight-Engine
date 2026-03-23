@@ -83,9 +83,75 @@ sales_order_headers.salesOrder
 
 ---
 
+## Step 2: Graph Model Design
+
+### Prompt
+
+```
+Using the validated join paths from dataset-analysis.md:
+1. Define graph nodes (business-level, NOT table-level)
+2. Define graph edges with source, target, join logic
+3. Abstract away SAP complexity (item-level joins internal, graph exposes clean relationships)
+4. Provide Node → tables and Edge → SQL mappings
+5. Highlight special cases (item-level joins, billing item padding)
+6. Example traversal: SalesOrder → Delivery → Billing → Payment
+7. Use ONLY validated joins from dataset-analysis.md
+```
+
+### Response Summary
+
+Designed a complete graph model with **8 node types** and **12 edge types**.
+
+**Nodes (business-level abstractions):**
+
+| Node | Tables Merged | ID |
+|------|--------------|-----|
+| SalesOrder | headers + items + schedule_lines | `salesOrder` |
+| Delivery | headers + items | `deliveryDocument` |
+| BillingDocument | headers + items + cancellations | `billingDocument` |
+| JournalEntry | journal_entry_items_ar | `companyCode/fiscalYear/accountingDocument` |
+| Payment | payments_ar | `companyCode/fiscalYear/accountingDocument` |
+| Customer | business_partners + addresses + assignments (×2) | `customer` |
+| Product | products + descriptions | `product` |
+| Plant | plants | `plant` |
+
+**Core O2C Edges (the main chain):**
+
+| Edge | From → To | Granularity | Padding? |
+|------|-----------|-------------|----------|
+| FULFILLED_BY | SalesOrder → Delivery | Item→Header | No |
+| BILLED_AS | Delivery → BillingDocument | Item→Header | **YES** ⚠️ |
+| POSTED_AS | BillingDocument → JournalEntry | Header | No |
+| CLEARED_BY | JournalEntry → Payment | Header | No |
+
+**Key design decisions:**
+- Item-level joins resolved internally, exposed as header-level edges
+- Composite IDs for financial nodes (`companyCode/fiscalYear/accountingDocument`)
+- Cancellation modeled as self-referencing edge on BillingDocument
+- Cytoscape visualization schema included with colors and shapes
+
+### Decision
+
+- Created `docs/graph-model.md` with complete node/edge definitions
+- Each node specifies exact table-to-field mapping
+- Each edge specifies exact SQL join with padding notes
+- Included graph traversal example (both visual and SQL)
+- Included Cytoscape visualization schema for frontend
+
+### Reasoning
+
+1. **Business-level abstraction** — Users think "Sales Order", not "sales_order_headers + sales_order_items + sales_order_schedule_lines". The graph hides SAP table complexity.
+2. **Item-level joins hidden** — Edges 1 (FULFILLED_BY) and 2 (BILLED_AS) require item-level SQL joins internally, but the graph presents clean header-to-header relationships. This was done with `SELECT DISTINCT` at header level.
+3. **Padding issue surfaced at edge level** — Rather than burying the `printf('%06d', ...)` fix deep in code, it's explicitly labeled on Edge 2. Every developer touching this edge will see the warning.
+4. **Composite IDs for financial docs** — JournalEntry and Payment use `companyCode/fiscalYear/accountingDocument` because `accountingDocument` alone could theoretically repeat across company codes or fiscal years.
+5. **Cancellation as self-edge** — Instead of a separate "Cancellation" node type (which would clutter the graph), cancellations are the same BillingDocument type with a `CANCELS` edge pointing to the original.
+
+---
+
 ## Next Steps
 
-**Step 2:** Relationship mapping finalization and graph model design
-**Step 3:** Join validation with full SQL execution on loaded data
+**Step 3:** Join validation with full SQL execution against loaded SQLite database
+**Step 4:** Logical graph modeling implementation
+**Step 5:** SQLite schema design and data loading
 
 ---
