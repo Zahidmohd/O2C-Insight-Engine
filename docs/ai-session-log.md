@@ -435,11 +435,29 @@ Explicitly outline SQLite constraints, LLM mapping limits, frontend loading arch
 
 ### Response Summary
 
-Drafted a clean, production-level `README.md` at the root of the project detailing the entire end-to-end framework. 
+Drafted a clean, production-level `README.md` at the root of the project detailing the entire end-to-end framework, refactored strictly to industry standards emphasizing high-level system components over raw code snippets.
 
-- **Architectural Flow Definitions:** Traced out `User -> LLM -> SQLite -> UI mapping`.
-- **Engineering Design Documentations (Frontend + Backend):** Highlighted the critical usage of static Node definitions preventing UI Cytoscape rendering loops via `<cy.destroy()>` triggers. Noted the `Execution Timeout` metrics, max-width string bindings, and limits mitigating SQL reflection attacks. Explored explicit rationale for migrating custom pre-padded strings to bypass complex string formatting execution within simple SQLite boundaries. 
-- **AI Iteration Details:** Discussed exactly how LLM Prompt engineering progressed over the build stages, specifying explicitly that the generic open source LLM model generated queries mapping ONLY to standard structure definitions and didn't construct the actual response rows directly, safely preventing "hallucinations" of source factual data.
+- **Architectural Flow Definitions:** Traced out the high-level boundary translations mapping explicit initiation, translation, validation, execution, and presentation phases.
+- **Frontend & Performance Overviews:** Abstracted UI interactions focusing strictly on loading bounds, error states, and garbage collection mechanisms for visual physics states.
+- **Safety and Reliability Constraints:** Outlined the strict boundaries isolating prompt evaluation timeouts and network payload limits completely protecting backend environments from structural data overloads.
+- **Graph and Observability Handling:** Explained logical node-edge translations conceptually. Detailed explicit tracing methodologies via unique structural request identifiers enabling distributed tracking methodologies without invoking source code concepts.
+
+---
+
+## Final Code Fix Step: Production-Grade Hardening
+
+### Prompt
+
+```
+Now perform FINAL CODE IMPROVEMENTS for backend and frontend.
+Apply production-level improvements to existing code without changing architecture.
+Update queryService.js, llmClient.js, queryRoutes.js, and App.jsx.
+```
+
+### Response Summary
+
+- **Backend Hardening:** Stripped generic markdown wrappers dynamically across OpenRouter and Groq LLM generations systematically protecting SQLite ingestion payloads. Built resilient execution log pipelines documenting `requestId`, `user query`, `SQL payload`, and evaluation limits deterministically. Enhanced `.json` payloads exporting generic exact mapping shapes `{ success: false, error: { message, type }}` cleanly routing payload evaluations properly. Ensure explicit single `LIMIT 100` bindings automatically appending trailing limitations avoiding database loop allocations natively.
+- **Frontend Fallbacks:** Upgraded UI payload boundaries resolving error abstractions correctly rendering backend `.type` mappings. Exposed structural visual overlays strictly projecting `"No graph data available"` dynamically when evaluating empty Canvas node length structures, saving user confusion efficiently.
 
 ---
 

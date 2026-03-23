@@ -83,10 +83,11 @@ function formatResponse(result, rawSql) {
     const graphData = extractGraph(finalRows);
 
     return {
+        success: true,
         summary: summary,
         rowCount: result.rowCount, // real count regardless of payload truncation
         keyFields: keyFields,
-        executionTimeMs: result.executionTimeMs,
+        executionTimeMs: Number(result.executionTimeMs),
         generatedSql: rawSql,
         data: finalRows, // actual sliced data bounded effectively
         graph: graphData
@@ -104,7 +105,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
     if (!domainCheck.valid) {
         console.warn(`[API-${requestId}] Domain Check Failed / Guardrail Prevented Engine Spawn`);
         return {
-            error: domainCheck.message,
+            success: false,
+            error: { message: domainCheck.message, type: 'VALIDATION_ERROR' },
             query: naturalLanguageQuery
         };
     }
@@ -128,20 +130,35 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         const dbResult = await withTimeout(executeQuery(rawSql), 5000, 'Database Execution');
 
         if (!dbResult.success) {
-             console.error(`[API-${requestId}] execution evaluation Error boundary trigger: ${dbResult.error}`);
-             return { error: 'Failed to execute query safely', message: dbResult.error, sql: rawSql };
+             console.error(`[API-${requestId}] execution evaluation Error boundary trigger:`, dbResult.error);
+             return { 
+                 success: false, 
+                 error: { message: dbResult.error, type: 'DB_ERROR' }, 
+                 query: naturalLanguageQuery 
+             };
         }
 
         console.log(`[API-${requestId}] Success bounds: ${dbResult.rowCount} payload fetched in ${dbResult.executionTimeMs}ms`);
 
         // 6. Format structurally backed result
         const finalResponse = formatResponse(dbResult, rawSql);
+
+        // Required Final Logging Check 
+        console.log(`[API-${requestId}] Request completed.`);
+        console.log(`- Query: ${naturalLanguageQuery}`);
+        console.log(`- SQL: ${rawSql.replace(/\n/g, ' ')}`);
+        console.log(`- Execution Time: ${finalResponse.executionTimeMs} ms`);
+        console.log(`- Row Count: ${finalResponse.rowCount}`);
+
         return finalResponse;
 
     } catch (e) {
          console.error(`[API-${requestId}] Pipeline Failure caught:`, e.message);
+         // Classify validation vs LLM errors simplistically based on thrown origin
+         const type = e.message.includes('Validation') ? 'VALIDATION_ERROR' : 'LLM_ERROR';
          return {
-             error: e.message,
+             success: false,
+             error: { message: e.message, type: type },
              query: naturalLanguageQuery
          };
     }

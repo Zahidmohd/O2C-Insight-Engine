@@ -15,7 +15,7 @@ router.post('/query', async (req, res) => {
             return res.status(400).json({
                 success: false,
                 requestId,
-                error: 'Query parameter is missing or invalid type.'
+                error: { message: 'Query parameter is missing or invalid type.', type: 'VALIDATION_ERROR' }
             });
         }
 
@@ -25,7 +25,7 @@ router.post('/query', async (req, res) => {
             return res.status(400).json({
                 success: false,
                 requestId,
-                error: 'Query cannot be empty.'
+                error: { message: 'Query cannot be empty.', type: 'VALIDATION_ERROR' }
             });
         }
 
@@ -33,7 +33,7 @@ router.post('/query', async (req, res) => {
             return res.status(400).json({
                 success: false,
                 requestId,
-                error: 'Query exceeds max length of 500 characters.'
+                error: { message: 'Query exceeds max length of 500 characters.', type: 'VALIDATION_ERROR' }
             });
         }
 
@@ -41,7 +41,7 @@ router.post('/query', async (req, res) => {
         const result = await queryService.processQuery(trimmedQuery, requestId);
 
         // Format and Return explicitly exactly as required
-        if (result.error) {
+        if (!result.success && result.error) {
             return res.status(400).json({
                 success: false,
                 requestId,
@@ -57,14 +57,15 @@ router.post('/query', async (req, res) => {
             rowCount: result.rowCount, // Exact total matching
             data: result.data || [],   // Protected list, max length 100
             graph: result.graph || { nodes: [], edges: [] },
-            executionTimeMs: result.executionTimeMs
+            executionTimeMs: Number(result.executionTimeMs)
         });
 
     } catch (e) {
-        console.error('[Route Error]', e.message);
+        console.error(`[API-${requestId}] Route Error:`, e.message);
         return res.status(500).json({
             success: false,
-            error: 'Internal processing error'
+            requestId,
+            error: { message: 'Internal processing error', type: 'API_ERROR' }
         });
     }
 });

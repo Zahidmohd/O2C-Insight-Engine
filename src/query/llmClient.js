@@ -58,15 +58,13 @@ async function generateSqlWithOpenRouter(prompt) {
  * Helper to strip markdown formatting around SQL responses
  */
 function cleanResponse(responseBody) {
-    responseBody = responseBody.trim();
-    if (responseBody.startsWith('```sql')) {
-        responseBody = responseBody.replace(/^```sql/, '');
-        responseBody = responseBody.replace(/```$/, '');
-    } else if (responseBody.startsWith('```')) {
-        responseBody = responseBody.replace(/^```/, '');
-        responseBody = responseBody.replace(/```$/, '');
-    }
-    return responseBody.trim();
+    let sql = responseBody.trim();
+    
+    // Remove all standard block wrappers explicitly
+    sql = sql.replace(/```sql/gi, '');
+    sql = sql.replace(/```/g, '');
+    
+    return sql.trim();
 }
 
 /**

@@ -47,7 +47,8 @@ function App() {
           requestId,
           query: reqQuery,
           rowCount,
-          executionTimeMs: Number(executionTimeMs).toFixed(2)
+          executionTimeMs: Number(executionTimeMs).toFixed(2),
+          hasNodes: graph && graph.nodes && graph.nodes.length > 0
         });
 
         // Initialize Cytoscape
@@ -132,11 +133,17 @@ function App() {
       }
     } catch (err) {
       console.error(err);
-      setError(
-        err.response?.data?.error || 
-        err.message || 
-        'An error occurred connecting to the API.'
-      );
+      
+      let errMsg = 'An error occurred connecting to the API.';
+      if (err.response?.data?.error) {
+         errMsg = typeof err.response.data.error === 'object' 
+             ? err.response.data.error.message 
+             : err.response.data.error;
+      } else if (err.message) {
+         errMsg = err.message;
+      }
+
+      setError(errMsg);
     } finally {
       setIsLoading(false);
     }
@@ -158,6 +165,8 @@ function App() {
             {isLoading ? 'Querying...' : 'Execute Query'}
           </button>
         </form>
+
+        {isLoading && <div className="loading" style={{ color: '#0052cc', fontWeight: 'bold', textAlign: 'center' }}>Loading...</div>}
 
         {error && (
           <div className="error-box">
@@ -197,6 +206,11 @@ function App() {
       {/* RIGHT PANEL */}
       <div className="right-panel">
         <div ref={cyContainerRef} className="cy-container" />
+        {resultInfo && !resultInfo.hasNodes && (
+           <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontSize: '18px', fontWeight: '500', color: '#6a737d' }}>
+               No graph data available
+           </div>
+        )}
       </div>
     </div>
   );

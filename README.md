@@ -1,40 +1,38 @@
 # Graph-Based Data Modeling and Query System
 
-An intelligent graph-based query engine designed to traverse highly interconnected SAP Order-to-Cash (O2C) datasets using natural language. The system converts raw English questions into secure SQL via large language models (LLMs), executes them safely against a structured SQLite database, and returns mapped graph representations for visual analysis in the browser.
+An intelligent graph-based query engine designed to traverse highly interconnected SAP Order-to-Cash (O2C) datasets using natural language. The system evaluates natural language requirements, securely maps them to structured data queries, and presents the resulting relationships as an interactive visual graph.
 
 ---
 
 ## 🏗️ Problem Overview
 
-Traditional enterprise data (like SAP ERPs) is spread across dozens of disconnected tables with complex join paths. Tracking the lifecycle of a single order involves manual database hunting. 
+Traditional enterprise data is often scattered across fragmented tables with complex integration paths. Tracing the full lifecycle of a single order typically involves manual and repetitive database navigation. 
 
-This project solves this by constructing a unified **Graph-based query system** over an extracted SAP Order-to-Cash dataset. It seamlessly tracks the exact multi-hop relationships representing the real-world flow of business objects: 
+This project solves this challenge by constructing a unified graph-based query system over an SAP Order-to-Cash dataset. It seamlessly traces the exact multi-hop relationships representing the real-world flow of business objects: 
 **SalesOrder → Delivery → Billing → JournalEntry → Payment**
 
-Users can simply ask *"Show me the journal entry linked to billing document 91150187"* and instantly receive accurate table rows alongside an interactive graph rendering.
+Users can ask plain-language questions about complex data paths and instantly receive an accurate, interactive graph rendering of the business flow.
 
 ---
 
 ## 🏛️ Architecture
 
-The system follows a strict, layered architecture to separate raw relational data from analytical UI workflows.
+The system follows a strict, layered architecture to elegantly separate raw relational data from analytical workflows:
 
-**User Query → LLM Generator → Safety Validator → SQLite DB → Response Mapper → Frontend Graph**
-
-- **Data Layer (SQLite):** Stores the denormalized multi-file SAP datasets using precise composite primary keys and strict B-Tree indexes to optimize traversal speeds.
-- **Query Engine (LLM → SQL):** An intelligent pipeline relying primarily on Groq with an OpenRouter fallback mechanism. Evaluates natural language to synthesize SQL queries based strictly on the O2C schema context.
-- **API Layer (Express.js):** REST API providing synchronous query resolution. It sanitizes inputs, enforces guardrails, explicitly caps payloads geographically, and generates structured JSON graph metadata.
-- **Frontend (React + Cytoscape):** A lightweight static React application splitting operations into a dual-pane analytical canvas. It mounts returning tabular JSON rows into strict visual graph nodes representing business interactions securely.
+- **Data Layer:** A localized, lightweight relational database configured to securely store denormalized SAP datasets. Primary keys and strict indexes are deployed to optimize traversal speeds across interconnected records.
+- **Query Engine:** An intelligent linguistic pipeline relying on large language models with automated fallback mechanisms. It synthesizes structured database queries strictly constrained to the authorized schema context.
+- **API Layer:** A RESTful abstraction providing synchronous query resolution. It sanitizes inputs, enforces system guardrails, explicitly caps payload sizes, and generates the structured graph metadata.
+- **Frontend Layer:** A lightweight, dual-pane analytical canvas. It processes the structured data payloads and translates them into an interactive node-and-edge visual representation.
 
 ---
 
 ## 🧠 Key Design Decisions & Tradeoffs
 
-1. **SQLite Instead of Postgres:** Chose SQLite for local, fast, zero-configuration development tightly tracking the raw source datasets, favoring simplicity over scalable concurrency for this prototype.
-2. **Raw SQL over ORM Layer:** Maintained full, unabstracted control over precise multi-hop join operations. Heavy ORMs generate unpredictable schema lookups inherently conflicting with explicit LLM prompt engineering.
-3. **Data Normalization at Ingestion:** Intentionally resolved critical string-padding anomalies natively during data ingestion before the records touched the database. This vastly simplified LLM generation logic ensuring index-friendly, simple equality joins.
-4. **Graph Abstraction over Tables:** Concealed the messy item-level table complexity (e.g. underlying ledger item rows) and abstracted them into clean, business-friendly node mappings (e.g. `BillingDocument`) returning to the client interface.
-5. **LLMs for Code, Not Data:** The LLM does NOT see the dataset or independently attempt to hallucinate facts. It strictly generates structural SQL syntax which is independently validated and ran securely against the factual deterministic database.
+1. **Relational Database over Graph Engine Providers:** Chose a highly-indexed relational database for local, fast development directly tracking the raw datasets, favoring prototyping simplicity and zero-configuration over immediate scalable concurrency.
+2. **Raw Querying over ORM Layers:** Maintained full, unabstracted control over precise multi-hop join operations. Heavy abstraction tools generate unpredictable schema lookups that inherently conflict with tightly controlled prompt engineering.
+3. **Data Normalization at Ingestion:** Intentionally resolved critical string-level formatting anomalies during the initial data ingestion pipeline. This significantly reduced the complexity of language model reasoning, ensuring highly reliable and index-friendly database traversals.
+4. **Graph Abstraction over Tables:** Concealed the messy, low-level ledger structures from the user interface. Tabular results are comprehensively abstracted into clean, business-friendly node mappings before reaching the client layer.
+5. **Architectural Separation of Duties:** The language model engine does not evaluate the factual dataset or independently deduce business responses. It is strictly limited to synthesizing structural syntax, which is subsequently validated and executed independently against the deterministic database.
 
 ---
 
@@ -42,121 +40,50 @@ The system follows a strict, layered architecture to separate raw relational dat
 
 Production-grade resilient boundaries surround the data querying engine:
 
-- **SQL Validation:** The application employs a static token blocklist aggressively validating queries to ensure read-only operations, preventing data mutations.
-- **Query Safety Constraints:** Over-ambitious data extractions are proactively constrained. The engine explicitly enforces payload limits preventing network buffer overflows or database overload.
-- **Domain Guardrails:** Invalid or off-topic queries are caught heuristically before reaching the LLM, preserving API token budgets and enhancing response speed.
-- **Response Size Limiting:** Returned payload structures are truncated to a safe, strict maximum to protect frontend performance memory footprints.
-- **Timeouts:** Strict temporal handlers surround the LLM generation process and SQL query evaluation loops, ensuring the system does not hang on complex network prompts or unoptimized user requests.
+- **Query Validation:** A strict token evaluation mechanism aggressively validates incoming queries to ensure they only attempt read-only operations, completely eliminating the risk of accidental data mutations.
+- **Query Safety and Limitation:** Unbounded data extractions are proactively constrained. The system enforces strict query size ceilings, preventing network buffer overflows or database overload scenarios.
+- **Response Size Limiting:** Returned payload structures are explicitly truncated to a safe mathematical maximum to protect frontend performance and reduce browser memory footprints.
+- **Systematic Domain Guardrails:** Irrelevant or off-topic queries are caught heuristically before initiating external evaluation, saving execution budgets and maintaining strict security perimeters.
 
 ---
 
 ## 🕸️ Graph Handling
 
-The system bridges relational database output directly into interactive UI visualizations:
+The system automatically bridges relational database output into interactive UI visualizations:
 
-- **Node-Edge Mapping:** Tabular database rows are aggregated dynamically translating rigid table concepts (Rows and Foreign Keys) directly into fluid Graph structures (Nodes and Edges) on the backend before sending to the client.
-- **State Management:** The frontend physics engine is meticulously managed. The visual lifecycle guarantees previous graphs are fully garbage-collected and destroyed prior to rendering new queries, entirely preventing visual duplication or memory leaks over prolonged sessions.
+- **Node-Edge Mapping:** Tabular interactions are aggregated dynamically, translating rigid table concepts natively into fluid visual relationships represented by interconnected nodes and targeted edge paths.
+- **Duplicate Prevention:** Visual physics state are meticulously managed. The rendering engine lifecycle explicitly guarantees that previous graphical representations are entirely cleared and garbage-collected before drawing new visualizations, entirely preventing memory leaks and state duplication.
 
 ---
 
-## 💻 Frontend Engineering Highlights
+## 💻 Frontend Description
 
-The UI was crafted matching strict dual-pane constraints without bloated CSS preprocessing layers:
+ The client interface is crafted matching strict usability standards without bloated styling frameworks:
 
-- **Loading & Error Management:** Standard UI states properly disable interactive form submissions mapping intuitive visual feedback during execution requests. Exhaustive error boundaries elegantly catch failing database operations or out-of-scope LLM logic, routing details visibly onto the screen instead of solely the console.
-- **Graph Rendering Behavior:** Utilizes an integrated physics simulation automatically spreading complex arbitrary network clusters dynamically avoiding manual static geometry plotting.
-- **Empty Graph Handling:** Implements an explicit fallback visual block actively guiding the user if the returned payload lacks interconnected network data.
+- **Loading and Error Handling:** The interactive UI actively mitigates overlapping requests through distinct loading states, clearly preventing concurrent form submissions. Exhaustive error boundaries elegantly catch failing database operations or out-of-scope logic, surfacing the contextual details visibly onto the screen to guide the user rather than failing silently.
+- **Graph Rendering Behavior:** Utilizes an integrated physics simulation which automatically calculates and spreads complex network clusters dynamically, ensuring optimal spacing and presentation without manual geometry mapping.
+- **Performance Considerations:** Rendering is highly optimized. The system intelligently handles edge cases, displaying structured empty states when queries yield no relationships, effectively preventing blank screens or physics calculation errors.
 
 ---
 
 ## 👁️ Observability
 
-- **Distributed Request Tracing:** The system employs a unique Request ID architecture dynamically assigned per query API hit. This metadata is exposed explicitly back to the Frontend UI, facilitating robust observability correlating specific graphical insights directly to backend console execution steps and LLM API events.
+- **Conceptual Request Tracing:** The system employs distributed request tracing via unique identification codes dynamically assigned to every individual query. This explicit metadata is exposed visibly through the frontend, creating an end-to-end observability chain that securely correlates user-facing visual output directly back to low-level internal execution logs and security validation steps.
 
 ---
 
-## 🤖 AI Usage & Workflow Integration
+## 🚀 System Flow
 
-The entire architecture inherently embeds AI via structured engineering rules:
-
-- **Prompt Iteration & Refinement:** Evolved constraints by pruning irrelevant dataset schemas, improving semantic translation accuracy significantly.
-- **Debugging Joins With AI:** Assisted logically navigating multi-hop connections, verifying data modeling paths matching real-world business entity structures.
-- **Maintained Automation:** Documented strict internal history logs sequentially tracing exact architectural milestones and prompt metadata: `docs/ai-session-log.md`.
-
----
-
-## 🚀 API Usage
-
-The backend application provides a JSON stateless REST mechanism.
-
-**`POST /api/query`**
-
-**Request:**
-```json
-{
-  "query": "Show orders not billed"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "requestId": "4c8c222b-...",
-  "query": "Show orders not billed",
-  "sql": "SELECT ... LIMIT 100;",
-  "rowCount": 14,
-  "data": [...],
-  "graph": {
-    "nodes": [...],
-    "edges": [...]
-  },
-  "executionTimeMs": "8.55"
-}
-```
-
----
-
-## 📂 Project Structure
-
-- `src/` - Backend Node.js Application Layer
-  - `query/` - Sub-engine coordinating LLM generation, mapping extraction paths, and validators.
-  - `db/` - ETL mapping code, ingestion logic, and SQLite execution abstractions.
-  - `routes/` - Express endpoint mappings managing external REST parameters.
-- `frontend/` - Standard React Client. Maintains UI states matching queried API payloads into explicitly mapped colored logical documents.
-- `docs/` - Original architecture notes, dataset constraints, and historical session logs.
-
----
-
-## ⚙️ How to Run
-
-### Backend (Node.js/Express)
-```bash
-# Provide API Access via .env (GROQ_API_KEY & OPENROUTER_API_KEY)
-npm install
-
-# Build Dataset and apply normalizations
-node src/db/init.js
-node src/db/loader.js
-
-# Boot Engine on http://localhost:3000
-npm start
-```
-
-### Frontend (React/Vite)
-```bash
-cd frontend
-npm install
-
-# Boot dev server on http://localhost:5173
-npm run dev
-```
+1. **Initiation:** The user inputs an objective request analyzing the business process.
+2. **Translation:** The query engine sanitizes and translates the request into a strictly governed data-access syntax.
+3. **Validation:** The system parses the instructions through a security review, dropping any potentially excessive or malformed boundaries.
+4. **Execution:** Protected syntax explores the relational datasets and pulls highly specific mapped paths.
+5. **Presentation:** The API aggregates the relational returns into an abstracted graph logic payload, which the frontend renders dynamically for active interaction.
 
 ---
 
 ## 🔮 Future Improvements
 
-1. **PostgreSQL Migration:** Migrate SQLite mappings into distributed Postgres instances empowering robust transactional concurrencies.
-2. **Caching Layers:** Introduce Redis bounding for repeated exact NL Query mappings bypassing LLM regeneration overhead entirely.
-3. **Advanced Query Planning:** Decouple monolithic SQL generation by executing step-based LLM validation streams proactively catching structural errors recursively.
-4. **Enhanced Diagnostics:** Incorporate deeper explicit debugging overlays inside the UI analyzing deeper metrics for executing planners.
+- **Database Scaling:** Migrate mapping pipelines from localized execution into distributed relational instances, empowering robust transactional concurrencies and continuous uptime.
+- **Intelligent Caching:** Introduce high-speed memory bounds for identical repeated queries, bypassing linguistic syntax regeneration budgets entirely.
+- **Advanced Query Planning:** Decouple monolithic syntax generation by routing logical phases through segmented validation agents to proactively catch structural anomalies recursively.
