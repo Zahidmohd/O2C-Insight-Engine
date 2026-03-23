@@ -8,6 +8,25 @@ const { extractGraph } = require('./graphExtractor');
  * Validates domain safety before spending API tokens
  * Rejects questions wildly outside the SAP O2C domain
  */
+function isIntentValid(query) {
+    const queryLower = query.toLowerCase().trim();
+    // Valid business intents derived from user specs plus standard English interrogation frames required for backward compatibility
+    const validIntents = ['trace', 'show', 'find', 'list', 'count', 'top', 'which', 'how', 'what', 'get', 'fetch', 'highest', 'lowest', 'give'];
+    
+    // Must contain at least one valid intent word structurally
+    const words = queryLower.match(/\b\w+\b/g) || [];
+    const hasIntent = validIntents.some(intent => words.includes(intent));
+
+    if (!hasIntent) {
+        return {
+            valid: false,
+            message: "Could not understand the query. Please rephrase using a clear business action like 'trace', 'show', or 'find'."
+        };
+    }
+    return { valid: true };
+}
+
+/**
 function isDomainQuery(query) {
     const queryLower = query.toLowerCase();
     
@@ -101,6 +120,16 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
     console.log(`\n[API-${requestId}] Query Service Evaluation: "${naturalLanguageQuery}"`);
 
     // 1. Guardrails
+    const intentCheck = isIntentValid(naturalLanguageQuery);
+    if (!intentCheck.valid) {
+        console.warn(`[API-${requestId}] Intent Check Failed: Missing Business Action`);
+        return {
+            success: false,
+            error: { message: intentCheck.message, type: 'VALIDATION_ERROR' },
+            query: naturalLanguageQuery
+        };
+    }
+
     const domainCheck = isDomainQuery(naturalLanguageQuery);
     if (!domainCheck.valid) {
         console.warn(`[API-${requestId}] Domain Check Failed / Guardrail Prevented Engine Spawn`);
@@ -328,12 +357,10 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
                 const labelStr = `${nodeType} ${row[entityKey]} (${aggKey}: ${row[aggKey]})`;
 
                 return {
-                    data: {
-                        id: `agg_node_${i}`,
-                        label: labelStr,
-                        type: nodeType,
-                        properties: row
-                    }
+                    id: `agg_node_${i}`,
+                    label: labelStr,
+                    type: nodeType,
+                    properties: row
                 };
             });
 

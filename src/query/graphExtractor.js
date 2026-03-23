@@ -80,29 +80,7 @@ function extractGraph(rows) {
             });
         }
 
-        // 7. Product
-        if (row.material || row.product) {
-            const prod = row.material || row.product;
-            const id = `PROD_${prod}`;
-            nodeMap.set(id, {
-                id,
-                type: 'Product',
-                label: `Product\n${prod}`,
-                properties: row
-            });
-        }
 
-        // 8. Plant
-        const plantId = row.plant || row.productionPlant;
-        if (plantId) {
-            const id = `PLANT_${plantId}`;
-            nodeMap.set(id, {
-                id,
-                type: 'Plant',
-                label: `Plant\n${plantId}`,
-                properties: row
-            });
-        }
 
         // --- EDGE EXTRACTION ---
         // Generates an edge key to prevent duplicate edges

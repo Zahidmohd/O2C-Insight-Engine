@@ -711,6 +711,36 @@ Every node (Sales Orders, Invoices, Summary Nodes, etc.) now accurately carries 
 
 ---
 
+## Fix: Intent Validation (STRICT)
+
+### Problem
+When the user executed a query with a typo or missing action verb (e.g., `"ce full flow for billing document"` instead of `"trace full flow"`), the LLM still attempted to guess the user's implicit intention, randomly producing hallucinated SQL that broke downstream pipelines or spent tokens performing a meaningless action.
+
+### Fix (`queryService.js`)
+- Injected `isIntentValid(query)` strictly functioning as a pre-flight execution boundary BEFORE the DOMAIN guardrails.
+- Analyzes the request checking if it natively begins with, or contains, a structurally explicit valid action (`trace`, `show`, `find`, `list`, `count`, `top`, etc.).
+- If NONE of the verbs exist, the backend strictly rejects the execution loop and surfaces cleanly: `"Could not understand the query. Please rephrase using a clear business action like 'trace', 'show', or 'find'."`
+
+### Outcome
+Costly API hits are structurally prevented when typos or arbitrary strings are accidentally submitted. The user gets mathematically sound immediate UI feedback without backend hallucination or graph crashes!
+
+---
+
+## Fix: Separate Data Extraction from Graph Visualization (CRITICAL)
+
+### Problem
+Previously, the backend's `graphExtractor.js` lazily generated physical graph vertices for almost any field it found connected in the query payload (e.g., `Product (material)` or `Plant`). While these fields are necessary structurally in SQL for correct `JOIN` execution, plotting hundreds of disconnected items natively bloated the UI map preventing the user from viewing the actual document logical workflow progression (Order -> Delivery -> Bill).
+
+### Fix (`graphExtractor.js`)
+- Explicitly purged all node generation blocks tracking non-core assets (`Product`, `Plant`, `billingDocumentItem`, `deliveryDocumentItem`).
+- Configured the system to curate graph entities EXCLUSIVELY to major relational documents (`Customer`, `SalesOrder`, `Delivery`, `BillingDocument`, `JournalEntry`, `Payment`).
+- Item-level granularity is preserved dynamically as deep `properties` metadata inside the tooltips instead of blowing up the map.
+
+### Outcome
+Graph canvases are now completely clear, linear sequences mimicking business actions. Technical join keys never render confusing unconnected shapes on the map!
+
+---
+
 ## 🏁 Project Completed
 
 The Graph-Based Data Modeling and Query System over an SAP Order-to-Cash Dataset has been fully conceived, coded, documented, correctly mapped, and tested securely.

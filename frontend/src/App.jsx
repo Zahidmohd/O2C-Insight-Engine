@@ -10,6 +10,9 @@ function App() {
   
   // Results
   const [resultInfo, setResultInfo] = useState(null);
+  
+  // Tooltip
+  const [selectedNode, setSelectedNode] = useState(null);
 
   // Cytoscape ref
   const cyRef = useRef(null);
@@ -31,6 +34,7 @@ function App() {
     setIsLoading(true);
     setError(null);
     setResultInfo(null);
+    setSelectedNode(null);
 
     // Clear existing graph before new query
     if (cyRef.current) {
@@ -133,6 +137,22 @@ function App() {
             animate: true
           }
         });
+
+        // Initialize click handlers bridging the newly exposed properties
+        cyRef.current.on('tap', 'node', (evt) => {
+          const node = evt.target;
+          setSelectedNode({
+            data: node.data(),
+            position: evt.renderedPosition
+          });
+        });
+
+        cyRef.current.on('tap', (evt) => {
+          if (evt.target === cyRef.current) {
+            setSelectedNode(null);
+          }
+        });
+
       }
     } catch (err) {
       console.error(err);
@@ -243,6 +263,33 @@ function App() {
                    <div>No graph data available</div>
                )}
            </div>
+        )}
+
+        {/* Node Hover Tooltip Card */}
+        {selectedNode && selectedNode.data.properties && (
+          <div className="node-tooltip" style={{
+            position: 'absolute',
+            left: selectedNode.position.x + 20 + 'px',
+            top: selectedNode.position.y + 20 + 'px',
+            backgroundColor: '#ffffff',
+            boxShadow: '0 8px 30px rgba(0,0,0,0.15)',
+            border: '1px solid #e0e0e0',
+            borderRadius: '8px',
+            padding: '16px',
+            width: '320px',
+            zIndex: 1000,
+            pointerEvents: 'none'
+          }}>
+            <h4 style={{ margin: '0 0 12px 0', color: '#333', fontSize: '15px' }}>{selectedNode.data.type || 'Entity Details'}</h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '400px', overflowY: 'auto' }}>
+              {Object.entries(selectedNode.data.properties).map(([key, val]) => (
+                <div key={key} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', borderBottom: '1px solid #f0f0f0', paddingBottom: '4px' }}>
+                  <span style={{ color: '#666', fontSize: '12px' }}>{key}</span>
+                  <span style={{ color: '#222', fontSize: '12px', wordBreak: 'break-word', fontWeight: '500' }}>{val?.toString()}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     </div>
