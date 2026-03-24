@@ -63,6 +63,43 @@ The database is SQLite. Do NOT use MySQL, PostgreSQL, or SQL Server specific syn
 - STRICT RULE: When filtering by customer (soldToParty) or showing a customer's full flow, use LEFT JOIN for ALL downstream tables (outbound_delivery_items, billing_document_items, billing_document_headers, journal entries, payments) so partial flows are returned.
 - STRICT RULE: For "delivered but not billed" queries, always join billing_document_items to outbound_delivery_items using: bdi.referenceSdDocument = odi.deliveryDocument AND bdi.referenceSdDocumentItem = odi.deliveryDocumentItem. Never use odi.referenceSdDocument for this join.
 
+--- FEW-SHOT EXAMPLES ---
+
+Example 1: "Trace the full flow for billing document 90504204"
+SELECT DISTINCT
+  soh.salesOrder, soh.soldToParty, soh.creationDate, soh.totalNetAmount AS orderAmount,
+  odh.deliveryDocument, odh.actualGoodsMovementDate,
+  bdh.billingDocument, bdh.billingDocumentDate, bdh.totalNetAmount, bdh.billingDocumentIsCancelled,
+  je.accountingDocument, je.accountingDocumentItem AS accountingDocumentType, je.amountInTransactionCurrency AS jeAmount, je.customer,
+  pay.clearingAccountingDocument, pay.postingDate AS paymentDate, pay.amountInTransactionCurrency AS paymentAmount
+FROM billing_document_headers bdh
+JOIN billing_document_items bdi ON bdi.billingDocument = bdh.billingDocument
+JOIN outbound_delivery_items odi ON odi.deliveryDocument = bdi.referenceSdDocument AND odi.deliveryDocumentItem = bdi.referenceSdDocumentItem
+JOIN outbound_delivery_headers odh ON odh.deliveryDocument = odi.deliveryDocument
+JOIN sales_order_headers soh ON soh.salesOrder = odi.referenceSdDocument
+LEFT JOIN journal_entry_items_accounts_receivable je ON je.accountingDocument = bdh.accountingDocument AND je.companyCode = bdh.companyCode AND je.fiscalYear = bdh.fiscalYear
+LEFT JOIN payments_accounts_receivable pay ON pay.clearingAccountingDocument = je.clearingAccountingDocument AND pay.companyCode = je.companyCode
+WHERE bdh.billingDocument = '90504204'
+LIMIT 100
+
+Example 2: "Which products have the most billing documents?"
+SELECT pd.productDescription, bdi.material, COUNT(DISTINCT bdi.billingDocument) AS billingCount
+FROM billing_document_items bdi
+LEFT JOIN product_descriptions pd ON pd.product = bdi.material AND pd.language = 'EN'
+GROUP BY bdi.material
+ORDER BY billingCount DESC
+LIMIT 10
+
+Example 3: "Find sales orders delivered but not billed"
+SELECT DISTINCT soh.salesOrder, soh.soldToParty, soh.totalNetAmount,
+  odi.deliveryDocument
+FROM sales_order_headers soh
+JOIN outbound_delivery_items odi ON odi.referenceSdDocument = soh.salesOrder
+JOIN outbound_delivery_headers odh ON odh.deliveryDocument = odi.deliveryDocument
+LEFT JOIN billing_document_items bdi ON bdi.referenceSdDocument = odi.deliveryDocument AND bdi.referenceSdDocumentItem = odi.deliveryDocumentItem
+WHERE bdi.billingDocument IS NULL
+LIMIT 100
+
 --- INSTRUCTIONS ---
 - Respond with standard SQLite SQL ONLY.
 - No markdown formatting wrappers like \`\`\`sql. Just the raw SQL string.
@@ -71,6 +108,8 @@ The database is SQLite. Do NOT use MySQL, PostgreSQL, or SQL Server specific syn
 - Try to answer the user's question as accurately and simply as possible.
 - CRITICAL: All ID columns (salesOrder, billingDocument, deliveryDocument, soldToParty, customer, businessPartner) are TEXT type. Always wrap filter values in single quotes. Example: WHERE soldToParty = '100017', NOT WHERE soldToParty = 100017.
 - STRICT RULE: billingDocumentIsCancelled is a numeric flag (0 or 1). For cancelled documents, always use \`billingDocumentIsCancelled = 1\`. Never use 'X', 'true', or other strings.
+- For "trace full flow" or "trace" queries involving a billing document, ALWAYS follow the pattern in Example 1 exactly.
+- For "trace full flow" starting from a sales order, reverse the direction: start from sales_order_headers, join outbound_delivery_items, then billing, then journal entry, then payment.
 `;
 
 function buildPrompt(userQuery) {

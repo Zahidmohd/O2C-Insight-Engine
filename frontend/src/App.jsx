@@ -7,18 +7,17 @@ function App() {
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  
-  // Results
   const [resultInfo, setResultInfo] = useState(null);
-  
-  // Tooltip
   const [selectedNode, setSelectedNode] = useState(null);
+  const [showLabels, setShowLabels] = useState(true);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
-  // Cytoscape ref
   const cyRef = useRef(null);
   const cyContainerRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const isDraggingTooltip = useRef(false);
+  const dragOffset = useRef({ x: 0, y: 0 });
 
-  // Unmount logic for Cytoscape
   useEffect(() => {
     return () => {
       if (cyRef.current) {
@@ -26,6 +25,215 @@ function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [resultInfo, error, isLoading]);
+
+  // Tooltip drag handlers
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (!isDraggingTooltip.current) return;
+      e.preventDefault();
+      setTooltipPos({
+        x: e.clientX - dragOffset.current.x,
+        y: e.clientY - dragOffset.current.y
+      });
+    };
+    const handleMouseUp = () => {
+      isDraggingTooltip.current = false;
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+  const handleTooltipDragStart = (e) => {
+    isDraggingTooltip.current = true;
+    const rect = e.currentTarget.getBoundingClientRect();
+    dragOffset.current = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    };
+  };
+
+  const initCytoscape = (graph, highlightNodes) => {
+    if (cyRef.current) {
+      cyRef.current.destroy();
+      cyRef.current = null;
+    }
+
+    const elements = [
+      ...graph.nodes.map(n => ({ data: n })),
+      ...graph.edges.map(e => ({ data: e }))
+    ];
+
+    if (elements.length === 0) return;
+
+    cyRef.current = cytoscape({
+      container: cyContainerRef.current,
+      elements: elements,
+      maxZoom: 2.5,
+      minZoom: 0.3,
+      style: [
+        // Default node: small dot, no label
+        {
+          selector: 'node',
+          style: {
+            'width': 10,
+            'height': 10,
+            'background-color': '#c8b4d4',
+            'border-width': 1.5,
+            'border-color': '#c8b4d4',
+            'background-opacity': 0.3,
+            'shape': 'ellipse',
+            'label': '',
+            'overlay-padding': '3px'
+          }
+        },
+        // Selected / tapped node: show label
+        {
+          selector: 'node:selected',
+          style: {
+            'width': 14,
+            'height': 14,
+            'border-width': 2.5,
+            'background-opacity': 0.9,
+            'label': 'data(label)',
+            'text-wrap': 'wrap',
+            'text-valign': 'bottom',
+            'text-halign': 'center',
+            'text-margin-y': 6,
+            'font-size': '8px',
+            'color': '#1a1a2e',
+            'text-max-width': '80px'
+          }
+        },
+        // Edges: very thin, light blue
+        {
+          selector: 'edge',
+          style: {
+            'width': 0.8,
+            'line-color': '#a8bce0',
+            'target-arrow-color': '#a8bce0',
+            'target-arrow-shape': 'triangle',
+            'arrow-scale': 0.5,
+            'curve-style': 'bezier',
+            'label': showLabels ? 'data(type)' : '',
+            'font-size': '7px',
+            'text-rotation': 'autorotate',
+            'text-background-opacity': 1,
+            'text-background-color': '#f7f8fa',
+            'text-background-padding': '1px',
+            'color': '#a0a8c0',
+            'opacity': 0.5
+          }
+        },
+        // Edge labels hidden class
+        {
+          selector: 'edge.hide-label',
+          style: { 'label': '' }
+        },
+        // Node type colors — red/pink outlined dots for documents, blue for others
+        {
+          selector: 'node[type="SalesOrder"]',
+          style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' }
+        },
+        {
+          selector: 'node[type="Delivery"]',
+          style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' }
+        },
+        {
+          selector: 'node[type="BillingDocument"]',
+          style: { 'background-color': '#e87c8a', 'border-color': '#e87c8a' }
+        },
+        {
+          selector: 'node[type="JournalEntry"]',
+          style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' }
+        },
+        {
+          selector: 'node[type="Payment"]',
+          style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' }
+        },
+        {
+          selector: 'node[type="Customer"]',
+          style: { 'background-color': '#e87c8a', 'border-color': '#e87c8a' }
+        },
+        {
+          selector: 'node[type="Aggregation"], node[type="Company"], node[type="Product"], node[type="Plant"], node[type="Document"]',
+          style: { 'background-color': '#e87c8a', 'border-color': '#e87c8a' }
+        }
+      ],
+      layout: {
+        name: 'breadthfirst',
+        directed: true,
+        padding: 60,
+        spacingFactor: 1.5,
+        animate: true,
+        animationDuration: 400,
+        fit: true,
+        avoidOverlap: true
+      }
+    });
+
+    // Tap node: select it (shows label), open tooltip
+    cyRef.current.on('tap', 'node', (evt) => {
+      // Deselect all, then select tapped
+      cyRef.current.nodes().deselect();
+      evt.target.select();
+
+      // Clamp tooltip position within graph panel bounds
+      const container = cyContainerRef.current;
+      const pos = evt.renderedPosition;
+      const tooltipW = 320;
+      const tooltipH = 350;
+      const cw = container ? container.offsetWidth : 800;
+      const ch = container ? container.offsetHeight : 600;
+
+      let x = pos.x + 20;
+      let y = pos.y + 20;
+
+      // If tooltip goes off right edge, flip to left side of node
+      if (x + tooltipW > cw) x = pos.x - tooltipW - 10;
+      // If tooltip goes off bottom, move it up
+      if (y + tooltipH > ch) y = Math.max(10, ch - tooltipH - 10);
+      // If still off top, clamp
+      if (y < 10) y = 10;
+
+      setSelectedNode({
+        data: evt.target.data()
+      });
+      setTooltipPos({ x, y });
+    });
+
+    // Tap background: deselect and close tooltip
+    cyRef.current.on('tap', (evt) => {
+      if (evt.target === cyRef.current) {
+        cyRef.current.nodes().deselect();
+        setSelectedNode(null);
+      }
+    });
+
+    // Highlight specific queried nodes
+    if (highlightNodes && highlightNodes.length > 0) {
+      cyRef.current.nodes().forEach(node => {
+        if (highlightNodes.includes(node.id())) {
+          node.style({
+            'width': 16,
+            'height': 16,
+            'border-width': 3,
+            'background-opacity': 0.9,
+            'border-color': '#1a1a2e'
+          });
+        }
+      });
+    }
+  };
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -36,7 +244,6 @@ function App() {
     setResultInfo(null);
     setSelectedNode(null);
 
-    // Clear existing graph before new query
     if (cyRef.current) {
       cyRef.current.destroy();
       cyRef.current = null;
@@ -44,8 +251,8 @@ function App() {
 
     try {
       const response = await axios.post('http://localhost:3000/api/query', { query });
-      const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary } = response.data;
-      
+      const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer } = response.data;
+
       if (success) {
         setResultInfo({
           requestId,
@@ -55,242 +262,262 @@ function App() {
           hasNodes: graph && graph.nodes && graph.nodes.length > 0,
           reason,
           suggestions,
-          summary
+          summary,
+          nlAnswer: nlAnswer || null
         });
 
-        // Initialize Cytoscape
-        const elements = [
-          ...graph.nodes.map(n => ({ data: n })),
-          ...graph.edges.map(e => ({ data: e }))
-        ];
-
-        cyRef.current = cytoscape({
-          container: cyContainerRef.current,
-          elements: elements,
-          style: [
-            {
-              selector: 'node',
-              style: {
-                'content': 'data(label)',
-                'text-wrap': 'wrap',
-                'text-valign': 'center',
-                'text-halign': 'center',
-                'background-color': '#0052cc',
-                'color': '#fff',
-                'font-size': '10px',
-                'width': '60px',
-                'height': '60px',
-                'border-width': 2,
-                'border-color': '#fff',
-                'shape': 'ellipse'
-              }
-            },
-            {
-              selector: 'edge',
-              style: {
-                'width': 2,
-                'line-color': '#9dbaea',
-                'target-arrow-color': '#9dbaea',
-                'target-arrow-shape': 'triangle',
-                'curve-style': 'bezier',
-                'label': 'data(type)',
-                'font-size': '10px',
-                'text-rotation': 'autorotate',
-                'text-background-opacity': 1,
-                'text-background-color': '#ffffff',
-                'text-background-padding': 2,
-                'color': '#333'
-              }
-            },
-            {
-              selector: 'node[type="SalesOrder"]',
-              style: { 'background-color': '#2e7d32' } // Green
-            },
-            {
-              selector: 'node[type="Delivery"]',
-              style: { 'background-color': '#f57c00' } // Orange
-            },
-            {
-              selector: 'node[type="BillingDocument"]',
-              style: { 'background-color': '#ed3b3b' } // Red
-            },
-            {
-              selector: 'node[type="JournalEntry"]',
-              style: { 'background-color': '#1976d2' } // Blue
-            },
-            {
-              selector: 'node[type="Payment"]',
-              style: { 'background-color': '#8e24aa' } // Purple
-            },
-            {
-              selector: 'node[type="Customer"]',
-              style: { 'background-color': '#424242' } // Dark Gray
-            },
-            {
-              selector: 'node[type="Plant"], node[type="Product"]',
-              style: { 'background-color': '#ffb300', 'color': '#000' } // Yellow
-            }
-          ],
-          layout: {
-            name: 'cose',
-            padding: 50,
-            animate: true
-          }
-        });
-
-        // Initialize click handlers bridging the newly exposed properties
-        cyRef.current.on('tap', 'node', (evt) => {
-          const node = evt.target;
-          setSelectedNode({
-            data: node.data(),
-            position: evt.renderedPosition
-          });
-        });
-
-        cyRef.current.on('tap', (evt) => {
-          if (evt.target === cyRef.current) {
-            setSelectedNode(null);
-          }
-        });
-
+        initCytoscape(graph, hl || []);
       }
     } catch (err) {
       console.error(err);
-      
       let errMsg = 'An error occurred connecting to the API.';
       if (err.response?.data?.error) {
-         errMsg = typeof err.response.data.error === 'object' 
-             ? err.response.data.error.message 
-             : err.response.data.error;
+        errMsg = typeof err.response.data.error === 'object'
+          ? err.response.data.error.message
+          : err.response.data.error;
       } else if (err.message) {
-         errMsg = err.message;
+        errMsg = err.message;
       }
-
       setError(errMsg);
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSearch(e);
+    }
+  };
+
+  const handleFitGraph = () => {
+    if (cyRef.current) {
+      cyRef.current.fit(undefined, 50);
+    }
+  };
+
+  const handleToggleLabels = () => {
+    setShowLabels(prev => {
+      const next = !prev;
+      if (cyRef.current) {
+        if (next) {
+          cyRef.current.edges().removeClass('hide-label');
+        } else {
+          cyRef.current.edges().addClass('hide-label');
+        }
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="app-container">
-      {/* LEFT PANEL */}
-      <div className="left-panel">
-        <h2 className="title">SAP O2C Graph Query</h2>
-        <form onSubmit={handleSearch} className="search-form">
-          <textarea 
-            placeholder="E.g., Show me the journal entry linked to billing document 91150187"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            disabled={isLoading}
-          />
-          <button type="submit" disabled={isLoading || !query.trim()}>
-            {isLoading ? 'Querying...' : 'Execute Query'}
-          </button>
-        </form>
-
-        {isLoading && <div className="loading" style={{ color: '#0052cc', fontWeight: 'bold', textAlign: 'center' }}>Loading...</div>}
-
-        {error && (
-          <div className="error-box">
-            <b>Error: </b> {error}
-          </div>
-        )}
-
-        {resultInfo ? (
-          <div className="result-info">
-            <h3>Execution Results</h3>
-            <div className="info-item">
-              <span className="label">Query:</span>
-              <span className="val">{resultInfo.query}</span>
-            </div>
-            <div className="info-item">
-              <span className="label">Request ID:</span>
-              <span className="val">{resultInfo.requestId}</span>
-            </div>
-            <div className="info-item">
-              <span className="label">Rows Parsed:</span>
-              <span className="val">{resultInfo.rowCount}</span>
-            </div>
-            <div className="info-item">
-              <span className="label">Execution Time:</span>
-              <span className="val">{resultInfo.executionTimeMs} ms</span>
-            </div>
-          </div>
-        ) : (
-          !isLoading && !error && (
-            <div className="empty-state">
-              <p>Type a query above to explore the graph.</p>
-            </div>
-          )
-        )}
+      {/* TOP NAV */}
+      <div className="top-nav">
+        <div className="nav-icon">&#9649;</div>
+        <div className="nav-breadcrumb">
+          Mapping <span className="nav-separator">/</span> <span className="nav-active">Order to Cash</span>
+        </div>
       </div>
 
-      {/* RIGHT PANEL */}
-      <div className="right-panel">
-        <div ref={cyContainerRef} className="cy-container" />
-        {resultInfo && !resultInfo.hasNodes && (
-           <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontSize: '18px', fontWeight: '500', color: '#6a737d', textAlign: 'center', backgroundColor: '#fff', padding: '24px', borderRadius: '8px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}>
-               {resultInfo.reason === 'INVALID_ID' ? (
-                   <>
-                       <div style={{ color: '#d32f2f', marginBottom: '8px' }}>Billing document not found...</div>
-                       <div style={{ fontSize: '14px', marginBottom: '16px' }}>{resultInfo.summary}</div>
-                       {resultInfo.suggestions && resultInfo.suggestions.length > 0 && (
-                           <div style={{ fontSize: '14px', borderTop: '1px solid #eee', paddingTop: '12px' }}>
-                               <span style={{ display: 'block', marginBottom: '8px' }}>Try one of these valid examples:</span>
-                               <ul style={{ listStyle: 'none', padding: 0, display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                                   {resultInfo.suggestions.map(s => (
-                                       <li key={s}>
-                                           <button 
-                                             type="button"
-                                             onClick={() => setQuery(`Trace full flow for billing document ${s}`)} 
-                                             style={{ padding: '6px 10px', fontSize: '13px', cursor: 'pointer', backgroundColor: '#f0f5ff', color: '#0052cc', borderRadius: '4px', border: '1px solid #adc2eb' }}
-                                           >
-                                             {s}
-                                           </button>
-                                       </li>
-                                   ))}
-                               </ul>
-                           </div>
-                       )}
-                   </>
-               ) : resultInfo.reason === 'NO_FLOW' ? (
-                   <>
-                       <div style={{ color: '#f57c00', marginBottom: '8px' }}>No connected flow found...</div>
-                       <div style={{ fontSize: '14px' }}>{resultInfo.summary}</div>
-                   </>
-               ) : (
-                   <div>No graph data available</div>
-               )}
-           </div>
-        )}
+      <div className="main-content">
+        {/* GRAPH PANEL (LEFT) */}
+        <div className="graph-panel">
+          <div ref={cyContainerRef} className="cy-container" />
 
-        {/* Node Hover Tooltip Card */}
-        {selectedNode && selectedNode.data.properties && (
-          <div className="node-tooltip" style={{
-            position: 'absolute',
-            left: selectedNode.position.x + 20 + 'px',
-            top: selectedNode.position.y + 20 + 'px',
-            backgroundColor: '#ffffff',
-            boxShadow: '0 8px 30px rgba(0,0,0,0.15)',
-            border: '1px solid #e0e0e0',
-            borderRadius: '8px',
-            padding: '16px',
-            width: '320px',
-            zIndex: 1000,
-            pointerEvents: 'auto'
-          }}>
-            <h4 style={{ margin: '0 0 12px 0', color: '#333', fontSize: '15px' }}>{selectedNode.data.type || 'Entity Details'}</h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '400px', overflowY: 'auto' }}>
-              {Object.entries(selectedNode.data.properties).map(([key, val]) => (
-                <div key={key} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', borderBottom: '1px solid #f0f0f0', paddingBottom: '4px' }}>
-                  <span style={{ color: '#666', fontSize: '12px' }}>{key}</span>
-                  <span style={{ color: '#222', fontSize: '12px', wordBreak: 'break-word', fontWeight: '500' }}>{val?.toString()}</span>
+          {/* Floating overlay buttons */}
+          <div className="graph-overlay-buttons">
+            <button className="overlay-btn" onClick={handleFitGraph} disabled={!cyRef.current}>
+              <span className="btn-icon">&#8596;</span> Fit View
+            </button>
+            <button className="overlay-btn" onClick={handleToggleLabels}>
+              <span className="btn-icon">&#9783;</span> {showLabels ? 'Hide Edge Labels' : 'Show Edge Labels'}
+            </button>
+          </div>
+
+          {/* Empty graph state */}
+          {(!resultInfo || (resultInfo && !resultInfo.hasNodes)) && !isLoading && (
+            <div className="graph-empty-state">
+              <div className="empty-icon">&#9672;</div>
+              {!resultInfo && <div>Ask a question to visualize the graph</div>}
+              {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'INVALID_ID' && (
+                <div style={{ color: '#b91c1c' }}>Document not found in the dataset</div>
+              )}
+              {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'NO_FLOW' && (
+                <div style={{ color: '#92400e' }}>No connected flow found</div>
+              )}
+              {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'AGGREGATION' && (
+                <div style={{ color: '#4a6cf7' }}>Aggregation results shown in chat</div>
+              )}
+              {resultInfo && !resultInfo.hasNodes && !resultInfo.reason && (
+                <div>No graph data available</div>
+              )}
+            </div>
+          )}
+
+          {/* Node Tooltip */}
+          {selectedNode && selectedNode.data.properties && (() => {
+            const entries = Object.entries(selectedNode.data.properties);
+            const MAX_VISIBLE = 15;
+            const visible = entries.slice(0, MAX_VISIBLE);
+            const hiddenCount = entries.length - MAX_VISIBLE;
+            // Count edges connected to this node
+            const connections = cyRef.current ? cyRef.current.getElementById(selectedNode.data.id).connectedEdges().length : 0;
+
+            return (
+              <div
+                className="node-tooltip"
+                style={{
+                  left: tooltipPos.x + 'px',
+                  top: tooltipPos.y + 'px'
+                }}
+                onMouseDown={handleTooltipDragStart}
+              >
+                <h4>{selectedNode.data.type || 'Entity'}</h4>
+                <div className="tooltip-body">
+                  <div className="tooltip-line"><span className="tooltip-key">Entity:</span> {selectedNode.data.type}</div>
+                  {visible.map(([key, val]) => (
+                    <div key={key} className="tooltip-line">
+                      <span className="tooltip-key">{key}:</span> {val?.toString() || ''}
+                    </div>
+                  ))}
+                  {hiddenCount > 0 && (
+                    <div className="tooltip-hidden">Additional fields hidden for readability</div>
+                  )}
+                  <div className="tooltip-connections">Connections: {connections}</div>
                 </div>
-              ))}
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* CHAT PANEL (RIGHT) */}
+        <div className="chat-panel">
+          <div className="chat-header">
+            <div className="chat-title">Chat with Graph</div>
+            <div className="chat-subtitle">Order to Cash</div>
+          </div>
+
+          <div className="agent-identity">
+            <div className="agent-avatar">O2C</div>
+            <div className="agent-info">
+              <div className="agent-name">Graph Agent</div>
+              <div className="agent-role">SAP O2C Analyst</div>
             </div>
           </div>
-        )}
+
+          <div className="chat-messages">
+            <div className="chat-welcome">
+              Hi! I can help you analyze the <strong>Order to Cash</strong> process. Try asking things like:
+              <ul style={{ marginTop: 8, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4, fontSize: '12.5px', color: '#6b6b80' }}>
+                <li>Trace full flow for billing document 90504204</li>
+                <li>Top 5 customers by billing amount</li>
+                <li>Show all cancelled billing documents</li>
+              </ul>
+            </div>
+
+            {/* Loading */}
+            {isLoading && (
+              <div className="chat-loading">
+                <div className="dot-pulse"><span></span><span></span><span></span></div>
+                Analyzing query...
+              </div>
+            )}
+
+            {/* Error */}
+            {error && <div className="chat-error">{error}</div>}
+
+            {/* Result */}
+            {resultInfo && (
+              <>
+                {/* User message echo */}
+                <div className="chat-user-msg">
+                  <span className="chat-user-label">You</span>
+                  <div className="chat-user-bubble">{resultInfo.query}</div>
+                </div>
+
+                {/* NL Answer from agent */}
+                {resultInfo.nlAnswer && (
+                  <div className="chat-agent-msg">
+                    <div className="chat-agent-header">
+                      <div className="agent-avatar-sm">O2C</div>
+                      <span className="agent-name-sm">Graph Agent</span>
+                    </div>
+                    <div className="chat-agent-bubble">{resultInfo.nlAnswer}</div>
+                  </div>
+                )}
+
+                {/* Fallback summary if no NL answer */}
+                {!resultInfo.nlAnswer && resultInfo.summary && (
+                  <div className={resultInfo.reason === 'INVALID_ID' ? 'chat-error' : resultInfo.reason === 'NO_FLOW' ? 'chat-info' : 'chat-welcome'}>
+                    {resultInfo.summary}
+                  </div>
+                )}
+
+                {/* Suggestion chips for invalid IDs */}
+                {resultInfo.reason === 'INVALID_ID' && resultInfo.suggestions && resultInfo.suggestions.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: '12px', color: '#6b6b80', marginBottom: 6 }}>Try a valid document:</div>
+                    <div className="suggestion-chips">
+                      {resultInfo.suggestions.map(s => (
+                        <button key={s} className="suggestion-chip" onClick={() => setQuery(`Trace full flow for billing document ${s}`)}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Result metadata card */}
+                {resultInfo.rowCount > 0 && (
+                  <div className="result-card">
+                    <div className="result-card-title">Execution Details</div>
+                    <div className="result-row">
+                      <span className="result-label">Query</span>
+                      <span className="result-value">{resultInfo.query}</span>
+                    </div>
+                    <div className="result-row">
+                      <span className="result-label">Request ID</span>
+                      <span className="result-value">{resultInfo.requestId}</span>
+                    </div>
+                    <div className="result-row">
+                      <span className="result-label">Rows</span>
+                      <span className="result-value">{resultInfo.rowCount}</span>
+                    </div>
+                    <div className="result-row">
+                      <span className="result-label">Execution</span>
+                      <span className="result-value">{resultInfo.executionTimeMs} ms</span>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input Area (Bottom) */}
+          <div className="chat-input-area">
+            <div className="chat-status">
+              <span className={`status-dot ${isLoading ? 'busy' : ''}`}></span>
+              {isLoading ? 'Processing query...' : 'Graph Agent is awaiting instructions'}
+            </div>
+            <form onSubmit={handleSearch} className="chat-input-wrapper">
+              <textarea
+                placeholder="Analyze anything"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isLoading}
+                rows={1}
+              />
+              <button type="submit" className="send-btn" disabled={isLoading || !query.trim()}>
+                Send
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   );

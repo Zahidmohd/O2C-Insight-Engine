@@ -57,10 +57,12 @@ router.post('/query', async (req, res) => {
             rowCount: result.rowCount, // Exact total matching
             data: result.data || [],   // Protected list, max length 100
             graph: result.graph || { nodes: [], edges: [] },
+            highlightNodes: result.highlightNodes || [],
             executionTimeMs: Number(result.executionTimeMs),
             reason: result.reason,
             suggestions: result.suggestions,
-            summary: result.summary
+            summary: result.summary,
+            nlAnswer: result.nlAnswer || null
         });
 
     } catch (e) {

@@ -125,10 +125,21 @@ function extractGraph(rows) {
         if (row.billingDocument && customerId) addEdge(`BILL_${row.billingDocument}`, `CUST_${customerId}`, 'BILLED_TO');
     });
 
-    return {
-        nodes: Array.from(nodeMap.values()),
-        edges: Array.from(edgeMap.values())
-    };
+    const edges = Array.from(edgeMap.values());
+    let nodes = Array.from(nodeMap.values());
+
+    // Only remove orphan nodes when edges exist (flow traces).
+    // For listing queries (no edges), keep all nodes.
+    if (edges.length > 0) {
+        const connectedNodeIds = new Set();
+        edges.forEach(e => {
+            connectedNodeIds.add(e.source);
+            connectedNodeIds.add(e.target);
+        });
+        nodes = nodes.filter(n => connectedNodeIds.has(n.id));
+    }
+
+    return { nodes, edges };
 }
 
 module.exports = {

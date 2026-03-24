@@ -1,5 +1,5 @@
 const { buildPrompt } = require('./promptBuilder');
-const { getSqlFromLLM } = require('./llmClient');
+const { getSqlFromLLM, generateNLAnswer } = require('./llmClient');
 const { validateSql } = require('./validator');
 const { executeQuery } = require('./sqlExecutor');
 const { extractGraph } = require('./graphExtractor');
@@ -43,7 +43,7 @@ function isDomainQuery(query) {
     if (matchedKeywords.length === 0) {
         return {
             valid: false,
-            message: "This system is designed to answer questions related to the provided dataset only (e.g., SAP Order-to-Cash, Customers, Products, Payments)."
+            message: "This system is designed to answer questions related to the provided dataset only."
         };
     }
     return { valid: true };
@@ -78,6 +78,25 @@ function withTimeout(promise, ms, operationName) {
 }
 
 /**
+ * Extracts explicitly referenced entities from the SQL conditionally building highlighting focus paths natively.
+ */
+function extractHighlightNodes(sql) {
+    const highlights = [];
+    const idRegex = /(?:billingDocument|salesOrder|customer|accountingDocument|deliveryDocument|soldToParty)\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/gi;
+    let match;
+    while ((match = idRegex.exec(sql)) !== null) {
+        const fieldName = match[0].toLowerCase();
+        const id = match[1];
+        if (fieldName.includes('billing')) highlights.push(`BILL_${id}`);
+        else if (fieldName.includes('sales')) highlights.push(`SO_${id}`);
+        else if (fieldName.includes('customer') || fieldName.includes('soldtoparty')) highlights.push(`CUST_${id}`);
+        else if (fieldName.includes('accounting')) highlights.push(`JE_${id}`);
+        else if (fieldName.includes('delivery')) highlights.push(`DEL_${id}`);
+    }
+    return highlights;
+}
+
+/**
  * Formats the final structural response output
  */
 function formatResponse(result, rawSql) {
@@ -97,6 +116,8 @@ function formatResponse(result, rawSql) {
         ? Object.keys(finalRows[0])
         : [];
 
+    const highlightNodes = extractHighlightNodes(rawSql);
+
     // Map rows mapping structural identifiers down to array graphs
     const graphData = extractGraph(finalRows);
 
@@ -108,7 +129,8 @@ function formatResponse(result, rawSql) {
         executionTimeMs: Number(result.executionTimeMs),
         generatedSql: rawSql,
         data: finalRows, // actual sliced data bounded effectively
-        graph: graphData
+        graph: graphData,
+        highlightNodes: highlightNodes
     };
 }
 
@@ -301,7 +323,20 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
             };
         }
 
-        // 5.5. Detect Aggregation Queries (CRITICAL UI CONTROL)
+        // 5.5. Generate Natural Language Answer from results
+        let nlAnswer = null;
+        try {
+            nlAnswer = await withTimeout(
+                generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount),
+                20000,
+                'NL Answer Generation'
+            );
+            console.log(`[API-${requestId}] NL Answer: ${nlAnswer}`);
+        } catch (nlErr) {
+            console.warn(`[API-${requestId}] NL answer generation failed:`, nlErr.message);
+        }
+
+        // 5.6. Detect Aggregation Queries (CRITICAL UI CONTROL)
         const upperSql = rawSql.toUpperCase();
         const isAggregation = upperSql.includes('COUNT(') || 
                               upperSql.includes('SUM(') || 
@@ -365,18 +400,24 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
 
             finalResponse = {
                 success: true,
-                summary: "This query returns aggregated results. Showing summarized nodes instead of relationships.",
+                nlAnswer: nlAnswer,
+                summary: nlAnswer || "This query returns aggregated results. Showing summarized nodes instead of relationships.",
                 reason: 'AGGREGATION',
                 rowCount: dbResult.rowCount,
                 keyFields: dbResult.rows.length > 0 ? Object.keys(dbResult.rows[0]) : [],
                 executionTimeMs: Number(dbResult.executionTimeMs),
                 generatedSql: rawSql,
                 data: dbResult.rows,
-                graph: { nodes: aggNodes, edges: [] }
+                graph: { nodes: aggNodes, edges: [] },
+                highlightNodes: extractHighlightNodes(rawSql)
             };
         } else {
             // 6. Format structurally backed result natively tracking edges
             finalResponse = formatResponse(dbResult, rawSql);
+            finalResponse.nlAnswer = nlAnswer;
+            if (nlAnswer) {
+                finalResponse.summary = nlAnswer;
+            }
         }
         if (fallbackApplied) {
             finalResponse.fallbackApplied = true;
