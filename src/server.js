@@ -27,8 +27,18 @@ app.use((err, req, res, next) => {
     });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`🚀 API Server running on http://localhost:${PORT}`);
+});
+
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use. Kill the existing process or use a different port.`);
+        console.error(`   Run: npx kill-port ${PORT}`);
+    } else {
+        console.error('❌ Server error:', err.message);
+    }
+    process.exit(1);
 });
 
 module.exports = app;

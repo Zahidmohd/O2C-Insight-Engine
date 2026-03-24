@@ -8,6 +8,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [resultInfo, setResultInfo] = useState(null);
+  const [chatHistory, setChatHistory] = useState([]);
   const [selectedNode, setSelectedNode] = useState(null);
   const [showLabels, setShowLabels] = useState(true);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -243,6 +244,7 @@ function App() {
     setError(null);
     setResultInfo(null);
     setSelectedNode(null);
+    const currentQuery = query.trim();
 
     if (cyRef.current) {
       cyRef.current.destroy();
@@ -250,11 +252,12 @@ function App() {
     }
 
     try {
-      const response = await axios.post('http://localhost:3000/api/query', { query });
+      const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      const response = await axios.post(`${API_BASE}/api/query`, { query });
       const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer } = response.data;
 
       if (success) {
-        setResultInfo({
+        const info = {
           requestId,
           query: reqQuery,
           rowCount,
@@ -264,7 +267,11 @@ function App() {
           suggestions,
           summary,
           nlAnswer: nlAnswer || null
-        });
+        };
+        setResultInfo(info);
+
+        // Add to chat history
+        setChatHistory(prev => [...prev, { type: 'user', text: currentQuery }, { type: 'agent', info }]);
 
         initCytoscape(graph, hl || []);
       }
@@ -279,6 +286,7 @@ function App() {
         errMsg = err.message;
       }
       setError(errMsg);
+      setChatHistory(prev => [...prev, { type: 'user', text: currentQuery }, { type: 'error', text: errMsg }]);
     } finally {
       setIsLoading(false);
     }
@@ -417,81 +425,70 @@ function App() {
               </ul>
             </div>
 
+            {/* Conversation History */}
+            {chatHistory.map((msg, i) => {
+              if (msg.type === 'user') {
+                return (
+                  <div key={i} className="chat-user-msg">
+                    <span className="chat-user-label">You</span>
+                    <div className="chat-user-bubble">{msg.text}</div>
+                  </div>
+                );
+              }
+              if (msg.type === 'error') {
+                return <div key={i} className="chat-error">{msg.text}</div>;
+              }
+              if (msg.type === 'agent' && msg.info) {
+                const r = msg.info;
+                return (
+                  <div key={i}>
+                    {r.nlAnswer && (
+                      <div className="chat-agent-msg">
+                        <div className="chat-agent-header">
+                          <div className="agent-avatar-sm">O2C</div>
+                          <span className="agent-name-sm">Graph Agent</span>
+                        </div>
+                        <div className="chat-agent-bubble">{r.nlAnswer}</div>
+                      </div>
+                    )}
+                    {!r.nlAnswer && r.summary && (
+                      <div className={r.reason === 'INVALID_ID' ? 'chat-error' : r.reason === 'NO_FLOW' ? 'chat-info' : 'chat-welcome'}>
+                        {r.summary}
+                      </div>
+                    )}
+                    {r.rowCount > 0 && (
+                      <div className="result-card">
+                        <div className="result-card-title">Execution Details</div>
+                        <div className="result-row">
+                          <span className="result-label">Query</span>
+                          <span className="result-value">{r.query}</span>
+                        </div>
+                        <div className="result-row">
+                          <span className="result-label">Request ID</span>
+                          <span className="result-value">{r.requestId}</span>
+                        </div>
+                        <div className="result-row">
+                          <span className="result-label">Rows</span>
+                          <span className="result-value">{r.rowCount}</span>
+                        </div>
+                        <div className="result-row">
+                          <span className="result-label">Execution</span>
+                          <span className="result-value">{r.executionTimeMs} ms</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+              return null;
+            })}
+
             {/* Loading */}
             {isLoading && (
               <div className="chat-loading">
                 <div className="dot-pulse"><span></span><span></span><span></span></div>
                 Analyzing query...
               </div>
-            )}
-
-            {/* Error */}
-            {error && <div className="chat-error">{error}</div>}
-
-            {/* Result */}
-            {resultInfo && (
-              <>
-                {/* User message echo */}
-                <div className="chat-user-msg">
-                  <span className="chat-user-label">You</span>
-                  <div className="chat-user-bubble">{resultInfo.query}</div>
-                </div>
-
-                {/* NL Answer from agent */}
-                {resultInfo.nlAnswer && (
-                  <div className="chat-agent-msg">
-                    <div className="chat-agent-header">
-                      <div className="agent-avatar-sm">O2C</div>
-                      <span className="agent-name-sm">Graph Agent</span>
-                    </div>
-                    <div className="chat-agent-bubble">{resultInfo.nlAnswer}</div>
-                  </div>
-                )}
-
-                {/* Fallback summary if no NL answer */}
-                {!resultInfo.nlAnswer && resultInfo.summary && (
-                  <div className={resultInfo.reason === 'INVALID_ID' ? 'chat-error' : resultInfo.reason === 'NO_FLOW' ? 'chat-info' : 'chat-welcome'}>
-                    {resultInfo.summary}
-                  </div>
-                )}
-
-                {/* Suggestion chips for invalid IDs */}
-                {resultInfo.reason === 'INVALID_ID' && resultInfo.suggestions && resultInfo.suggestions.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: '12px', color: '#6b6b80', marginBottom: 6 }}>Try a valid document:</div>
-                    <div className="suggestion-chips">
-                      {resultInfo.suggestions.map(s => (
-                        <button key={s} className="suggestion-chip" onClick={() => setQuery(`Trace full flow for billing document ${s}`)}>
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Result metadata card */}
-                {resultInfo.rowCount > 0 && (
-                  <div className="result-card">
-                    <div className="result-card-title">Execution Details</div>
-                    <div className="result-row">
-                      <span className="result-label">Query</span>
-                      <span className="result-value">{resultInfo.query}</span>
-                    </div>
-                    <div className="result-row">
-                      <span className="result-label">Request ID</span>
-                      <span className="result-value">{resultInfo.requestId}</span>
-                    </div>
-                    <div className="result-row">
-                      <span className="result-label">Rows</span>
-                      <span className="result-value">{resultInfo.rowCount}</span>
-                    </div>
-                    <div className="result-row">
-                      <span className="result-label">Execution</span>
-                      <span className="result-value">{resultInfo.executionTimeMs} ms</span>
-                    </div>
-                  </div>
-                )}
-              </>
             )}
 
             <div ref={messagesEndRef} />

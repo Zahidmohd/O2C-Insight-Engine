@@ -1,89 +1,233 @@
 # Graph-Based Data Modeling and Query System
 
-An intelligent graph-based query engine designed to traverse highly interconnected SAP Order-to-Cash (O2C) datasets using natural language. The system evaluates natural language requirements, securely maps them to structured data queries, and presents the resulting relationships as an interactive visual graph.
+An intelligent graph-based query engine that traverses SAP Order-to-Cash (O2C) datasets using natural language. Users ask plain-language questions and receive both a **natural language answer** and an **interactive graph visualization** of the business flow.
+
+**Core Flow:** SalesOrder → Delivery → Billing → JournalEntry → Payment
 
 ---
 
-## 🏗️ Problem Overview
+## Quick Start
 
-Traditional enterprise data is often scattered across fragmented tables with complex integration paths. Tracing the full lifecycle of a single order typically involves manual and repetitive database navigation. 
+```bash
+# 1. Install dependencies
+npm install
+cd frontend && npm install && cd ..
 
-This project solves this challenge by constructing a unified graph-based query system over an SAP Order-to-Cash dataset. It seamlessly traces the exact multi-hop relationships representing the real-world flow of business objects: 
-**SalesOrder → Delivery → Billing → JournalEntry → Payment**
+# 2. Configure environment
+cp .env.example .env
+# Add your API keys to .env:
+#   GROQ_API_KEY=your_groq_key
+#   OPENROUTER_API_KEY=your_openrouter_key (fallback)
 
-Users can ask plain-language questions about complex data paths and instantly receive an accurate, interactive graph rendering of the business flow.
+# 3. Initialize database (first time only)
+node src/db/loader.js
 
----
+# 4. Start backend
+node src/server.js
 
-## 🏛️ Architecture
+# 5. Start frontend (separate terminal)
+cd frontend && npm run dev
+```
 
-The system follows a strict, layered architecture to elegantly separate raw relational data from analytical workflows:
-
-- **Data Layer:** A localized, lightweight relational database configured to securely store denormalized SAP datasets. Primary keys and strict indexes are deployed to optimize traversal speeds across interconnected records.
-- **Query Engine:** An intelligent linguistic pipeline relying on large language models with automated fallback mechanisms. It synthesizes structured database queries strictly constrained to the authorized schema context.
-- **API Layer:** A RESTful abstraction providing synchronous query resolution. It sanitizes inputs, enforces system guardrails, explicitly caps payload sizes, and generates the structured graph metadata.
-- **Frontend Layer:** A lightweight, dual-pane analytical canvas. It processes the structured data payloads and translates them into an interactive node-and-edge visual representation.
-
----
-
-## 🧠 Key Design Decisions & Tradeoffs
-
-1. **Relational Database over Graph Engine Providers:** Chose a highly-indexed relational database for local, fast development directly tracking the raw datasets, favoring prototyping simplicity and zero-configuration over immediate scalable concurrency.
-2. **Raw Querying over ORM Layers:** Maintained full, unabstracted control over precise multi-hop join operations. Heavy abstraction tools generate unpredictable schema lookups that inherently conflict with tightly controlled prompt engineering.
-3. **Data Normalization at Ingestion:** Intentionally resolved critical string-level formatting anomalies during the initial data ingestion pipeline. This significantly reduced the complexity of language model reasoning, ensuring highly reliable and index-friendly database traversals.
-4. **Graph Abstraction over Tables:** Concealed the messy, low-level ledger structures from the user interface. Tabular results are comprehensively abstracted into clean, business-friendly node mappings before reaching the client layer.
-5. **Architectural Separation of Duties:** The language model engine does not evaluate the factual dataset or independently deduce business responses. It is strictly limited to synthesizing structural syntax, which is subsequently validated and executed independently against the deterministic database.
+Open `http://localhost:5173` in your browser.
 
 ---
 
-## 🛡️ Performance & Safety
+## Architecture
 
-Production-grade resilient boundaries surround the data querying engine:
+```
+┌────────────────┐     ┌─────────────────────────────────────────────┐
+│   React UI     │     │              Node.js Backend                │
+│  (Vite +       │────▶│  queryRoutes.js                             │
+│   Cytoscape)   │     │    ├─ queryService.js (orchestrator)        │
+│                │◀────│    │   ├─ promptBuilder.js (schema context) │
+│  Chat Panel    │     │    │   ├─ llmClient.js (Groq/OpenRouter)   │
+│  Graph Panel   │     │    │   ├─ validator.js (SQL safety)         │
+│  Tooltip       │     │    │   ├─ sqlExecutor.js (SQLite)           │
+│                │     │    │   ├─ graphExtractor.js (nodes/edges)   │
+└────────────────┘     │    │   └─ NL Answer generation (2nd LLM)   │
+                       │    └─ server.js (Express + CORS)            │
+                       └──────────────┬──────────────────────────────┘
+                                      │
+                       ┌──────────────▼──────────────┐
+                       │   SQLite (sap_otc.db)       │
+                       │   19 tables, 18+ indexes    │
+                       │   All columns TEXT           │
+                       └─────────────────────────────┘
+```
 
-- **Query Validation:** A strict token evaluation mechanism aggressively validates incoming queries to ensure they only attempt read-only operations, completely eliminating the risk of accidental data mutations.
-- **Query Safety and Limitation:** Unbounded data extractions are proactively constrained. The system enforces strict query size ceilings, preventing network buffer overflows or database overload scenarios.
-- **Response Size Limiting:** Returned payload structures are explicitly truncated to a safe mathematical maximum to protect frontend performance and reduce browser memory footprints.
-- **Systematic Domain Guardrails:** Irrelevant or off-topic queries are caught heuristically before initiating external evaluation, saving execution budgets and maintaining strict security perimeters.
+### Directory Structure
+
+```
+src/
+├── db/
+│   ├── connection.js    # SQLite connection with Promise wrappers
+│   ├── init.js          # Schema initialization
+│   ├── loader.js        # JSONL → SQLite ingestion with padding transforms
+│   └── schema.sql       # 19 tables, indexes, composite keys
+├── query/
+│   ├── promptBuilder.js # Schema context + few-shot examples for LLM
+│   ├── llmClient.js     # Groq primary + OpenRouter fallback, NL answer generation
+│   ├── validator.js     # SQL safety (blocklist, read-only, no subquery JOINs)
+│   ├── sqlExecutor.js   # Parameterized execution with timing
+│   ├── queryService.js  # Full pipeline orchestrator
+│   └── graphExtractor.js# Row → node/edge mapping with orphan filtering
+├── routes/
+│   └── queryRoutes.js   # POST /api/query endpoint
+└── server.js            # Express server with error handling
+frontend/
+├── src/
+│   ├── App.jsx          # Main component: graph + chat + tooltip
+│   ├── App.css          # Complete UI styling
+│   └── index.css        # Base reset
+└── package.json
+```
 
 ---
 
-## 🕸️ Graph Handling
+## Key Design Decisions
 
-The system automatically bridges relational database output into interactive UI visualizations:
-
-- **Node-Edge Mapping:** Tabular interactions are aggregated dynamically, translating rigid table concepts natively into fluid visual relationships represented by interconnected nodes and targeted edge paths.
-- **Duplicate Prevention:** Visual physics state are meticulously managed. The rendering engine lifecycle explicitly guarantees that previous graphical representations are entirely cleared and garbage-collected before drawing new visualizations, entirely preventing memory leaks and state duplication.
-
----
-
-## 💻 Frontend Description
-
- The client interface is crafted matching strict usability standards without bloated styling frameworks:
-
-- **Loading and Error Handling:** The interactive UI actively mitigates overlapping requests through distinct loading states, clearly preventing concurrent form submissions. Exhaustive error boundaries elegantly catch failing database operations or out-of-scope logic, surfacing the contextual details visibly onto the screen to guide the user rather than failing silently.
-- **Graph Rendering Behavior:** Utilizes an integrated physics simulation which automatically calculates and spreads complex network clusters dynamically, ensuring optimal spacing and presentation without manual geometry mapping.
-- **Performance Considerations:** Rendering is highly optimized. The system intelligently handles edge cases, displaying structured empty states when queries yield no relationships, effectively preventing blank screens or physics calculation errors.
+| Decision | Rationale |
+|---|---|
+| **SQLite over Neo4j/Graph DB** | Zero-config local development; raw JSONL data maps directly to relational tables; 18+ targeted indexes make multi-hop joins fast (~3-6ms) |
+| **Raw SQL over ORM** | Full control over precise 5-table JOIN chains; ORMs generate unpredictable queries that conflict with prompt engineering |
+| **Billing item padding at ingestion** | Critical data fix: raw data has unpadded "10" vs zero-padded "000010" — 0/245 direct matches, 245/245 after padding. Fixed once in loader, not in every query |
+| **All columns TEXT** | SAP identifiers have leading zeros (e.g., customer "0000100017") — numeric types would silently strip them |
+| **Two LLM calls per query** | 1st: NL → SQL generation. 2nd: SQL results → NL answer. Separation ensures deterministic data + readable output |
+| **Groq primary, OpenRouter fallback** | Groq is faster for Llama 3.1 70B; OpenRouter provides redundancy if Groq is down or rate-limited |
+| **Graph nodes = 6 core document types** | Customer, SalesOrder, Delivery, BillingDocument, JournalEntry, Payment. Product/Plant shown as tooltip properties only to avoid visual clutter |
 
 ---
 
-## 👁️ Observability
+## LLM Prompting Strategy
 
-- **Conceptual Request Tracing:** The system employs distributed request tracing via unique identification codes dynamically assigned to every individual query. This explicit metadata is exposed visibly through the frontend, creating an end-to-end observability chain that securely correlates user-facing visual output directly back to low-level internal execution logs and security validation steps.
+The prompt in `promptBuilder.js` is carefully structured:
+
+1. **Schema Context** — Exact table names, column names, and primary keys (11 tables relevant to O2C)
+2. **Validated Join Relationships** — 5 specific JOIN patterns with exact column mappings, tested against the actual data
+3. **Join Strategy Rules** — Prefer header-level joins, use LEFT JOIN for partial flows, never use subqueries in JOINs
+4. **Few-Shot Examples** — 3 concrete SQL examples (trace flow, aggregation, broken flows) to eliminate LLM non-determinism
+5. **Instructions** — SQLite-only syntax, TEXT type quoting rules, cancelled flag handling
+
+### NL Answer Generation
+
+After SQL execution, a second LLM call converts raw rows into a human-readable sentence:
+- Input: user question + first 10 rows + total row count
+- Output: concise factual answer backed by data (e.g., "The journal entry linked to billing document 91150187 is 9400635958")
+- Timeout: 20s with graceful degradation (falls back to metadata summary)
 
 ---
 
-## 🚀 System Flow
+## Safety & Guardrails
 
-1. **Initiation:** The user inputs an objective request analyzing the business process.
-2. **Translation:** The query engine sanitizes and translates the request into a strictly governed data-access syntax.
-3. **Validation:** The system parses the instructions through a security review, dropping any potentially excessive or malformed boundaries.
-4. **Execution:** Protected syntax explores the relational datasets and pulls highly specific mapped paths.
-5. **Presentation:** The API aggregates the relational returns into an abstracted graph logic payload, which the frontend renders dynamically for active interaction.
+### Multi-Layer Protection
+
+1. **Intent Validation** — Rejects queries without recognizable business action words (30+ allowed intent verbs)
+2. **Domain Guardrails** — Requires at least one SAP/O2C domain keyword; blocks off-topic questions before LLM call
+3. **SQL Blocklist** — Rejects DELETE, UPDATE, DROP, ALTER, PRAGMA, load_extension
+4. **Read-Only Enforcement** — Only SELECT statements pass validation
+5. **Subquery Block** — No nested SELECT inside JOIN conditions (prevents cartesian explosions)
+6. **LIMIT 100 Enforcement** — Auto-appended if missing from LLM output
+7. **Execution Timeouts** — LLM: 15s, DB: 5s, NL Answer: 20s
+8. **Payload Truncation** — Max 100 rows in API response regardless of DB result
+9. **ID Existence Checks** — Pre-validates billingDocument, salesOrder, deliveryDocument, and customer IDs before executing the main query; returns suggestions if invalid
+
+### Fallback Mechanisms
+
+- **LEFT JOIN Retry** — If a flow query returns 0 rows (e.g., incomplete O2C chain), the system automatically relaxes INNER JOINs to LEFT JOINs and retries
+- **LLM Fallback** — If Groq fails, automatically retries with OpenRouter
+- **Orphan Node Removal** — Nodes with zero edges are filtered from flow queries (but kept in listing queries)
 
 ---
 
-## 🔮 Future Improvements
+## Graph Handling
 
-- **Database Scaling:** Migrate mapping pipelines from localized execution into distributed relational instances, empowering robust transactional concurrencies and continuous uptime.
-- **Intelligent Caching:** Introduce high-speed memory bounds for identical repeated queries, bypassing linguistic syntax regeneration budgets entirely.
-- **Advanced Query Planning:** Decouple monolithic syntax generation by routing logical phases through segmented validation agents to proactively catch structural anomalies recursively.
+### Node Types & Colors
+
+| Node Type | Color | ID Pattern |
+|---|---|---|
+| SalesOrder | Blue (#6b9cf7) | SO_{id} |
+| Delivery | Blue (#6b9cf7) | DEL_{id} |
+| BillingDocument | Pink (#e87c8a) | BILL_{id} |
+| JournalEntry | Blue (#6b9cf7) | JE_{id} |
+| Payment | Blue (#6b9cf7) | PAY_{id} |
+| Customer | Pink (#e87c8a) | CUST_{id} |
+
+### Edge Types
+
+ORDERED, FULFILLED_BY, BILLED_AS, POSTED_AS, CLEARED_BY, BILLED_TO — representing the O2C chain relationships.
+
+### Layout
+
+- **Breadthfirst (directed)** — Clean hierarchical top-to-bottom flow matching the O2C chain
+- **Fit + zoom capping** — Auto-fits with maxZoom 2.5 to prevent oversized nodes on small graphs
+
+---
+
+## Frontend Features
+
+- **Dual-Pane Layout** — Graph panel (~70% width) + Chat panel (~340px)
+- **Conversational Chat** — Full conversation history with user/agent message bubbles
+- **Natural Language Answers** — AI-generated human-readable answers displayed as agent messages
+- **Interactive Graph** — Click nodes to see tooltip with all properties, drag tooltip anywhere
+- **Fit View / Hide Edge Labels** — Floating action buttons on graph panel
+- **Draggable Tooltips** — Tooltips can be dragged freely if they appear off-screen
+- **Suggestion Chips** — When an invalid document ID is entered, valid alternatives are suggested
+- **Loading States** — Animated dot pulse during query processing
+
+---
+
+## Observability
+
+Every query is assigned a unique `requestId` (UUID v4) that appears in:
+- Server console logs (with SQL, execution time, row count)
+- Frontend execution details card
+- API response payload
+
+This enables end-to-end tracing from UI to database.
+
+---
+
+## API Reference
+
+### POST /api/query
+
+**Request:**
+```json
+{ "query": "Trace full flow for billing document 90504204" }
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "requestId": "uuid",
+  "query": "...",
+  "sql": "SELECT ...",
+  "rowCount": 5,
+  "executionTimeMs": 3.42,
+  "nlAnswer": "The billing document 90504204 is linked to sales order ...",
+  "summary": "...",
+  "reason": null,
+  "graph": { "nodes": [...], "edges": [...] },
+  "highlightNodes": ["BILL_90504204"],
+  "data": [...]
+}
+```
+
+---
+
+## Dataset
+
+19 JSONL tables from SAP S/4HANA Order-to-Cash process:
+- **10 Transactional:** sales_order_headers/items, outbound_delivery_headers/items, billing_document_headers/items/cancellations, journal_entry_items, payments, schedule_lines
+- **9 Master Data:** business_partners, addresses, customer_company/sales_area_assignments, products, product_descriptions, plants, product_plants, product_storage_locations
+
+---
+
+## Future Improvements
+
+- **Intelligent Caching** — Cache repeated queries to bypass LLM regeneration
+- **Conversation Memory** — Pass previous Q&A context to LLM for follow-up questions
+- **Database Scaling** — Migrate to PostgreSQL for concurrent access
+- **Export** — Download graph as PNG/SVG or data as CSV

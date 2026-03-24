@@ -11,13 +11,22 @@ const { extractGraph } = require('./graphExtractor');
 function isIntentValid(query) {
     const queryLower = query.toLowerCase().trim();
     // Valid business intents derived from user specs plus standard English interrogation frames required for backward compatibility
-    const validIntents = ['trace', 'show', 'find', 'list', 'count', 'top', 'which', 'how', 'what', 'get', 'fetch', 'highest', 'lowest', 'give'];
+    const validIntents = [
+        'trace', 'show', 'find', 'list', 'count', 'top', 'which', 'how', 'what',
+        'get', 'fetch', 'highest', 'lowest', 'give', 'total', 'average', 'identify',
+        'all', 'are', 'is', 'does', 'do', 'has', 'have', 'between', 'for',
+        'compare', 'check', 'display', 'search', 'broken', 'incomplete', 'cancelled',
+        'who', 'where', 'when', 'many', 'much'
+    ];
     
     // Must contain at least one valid intent word structurally
     const words = queryLower.match(/\b\w+\b/g) || [];
     const hasIntent = validIntents.some(intent => words.includes(intent));
 
-    if (!hasIntent) {
+    // Also allow queries that contain document IDs (just numbers)
+    const hasDocumentId = /\d{5,}/.test(queryLower);
+
+    if (!hasIntent && !hasDocumentId) {
         return {
             valid: false,
             message: "Could not understand the query. Please rephrase using a clear business action like 'trace', 'show', or 'find'."
@@ -34,7 +43,11 @@ function isDomainQuery(query) {
         'order', 'sales', 'delivery', 'bill', 'invoice', 
         'journal', 'payment', 'customer', 'product', 'plant',
         'document', 'item', 'amount', 'clearing', 'flow',
-        'company', 'fiscal', 'accounting', 'partner'
+        'company', 'fiscal', 'accounting', 'partner',
+        'trace', 'material', 'address', 'status', 'cancelled',
+        'billed', 'delivered', 'posted', 'cleared', 'entry',
+        'shipping', 'quantity', 'currency', 'net', 'total',
+        'o2c', 'sap', 'transaction', 'record', 'data'
     ];
     
     // Check if query contains at least one domain keyword
@@ -176,54 +189,67 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         // 4. Validate output
         validateSql(rawSql); // Throws Error if unsafe
 
-        // 4.5. Check if specific billing document exists in DB
-        const idMatch = rawSql.match(/billingDocument\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i);
+        // 4.5. Existence checks for referenced document IDs
         let explicitIdChecked = false;
-        
-        if (idMatch && idMatch[1]) {
-            const extractedId = idMatch[1];
-            explicitIdChecked = true;
-            console.log(`[API-${requestId}] Check: Testing existence of billing document '${extractedId}'...`);
-            
-            const checkQuery = `SELECT billingDocument FROM billing_document_headers WHERE billingDocument = '${extractedId}' LIMIT 1;`;
-            const checkResult = await withTimeout(executeQuery(checkQuery), 2000, 'DB Existence Check');
-            
-            if (checkResult.success && checkResult.rowCount === 0) {
-                console.log(`[API-${requestId}] Check: Invalid billing ID detected: ${extractedId}`);
+        let explicitCustChecked = false;
+        let extractedCustId = null;
+
+        const idChecks = [
+            { regex: /billingDocument\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'billing_document_headers', column: 'billingDocument', label: 'Billing document' },
+            { regex: /(?:soh\.|sales_order_headers\.)?\bsalesOrder\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'sales_order_headers', column: 'salesOrder', label: 'Sales order' },
+            { regex: /deliveryDocument\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'outbound_delivery_headers', column: 'deliveryDocument', label: 'Delivery document' }
+        ];
+
+        for (const check of idChecks) {
+            const match = rawSql.match(check.regex);
+            if (match && match[1]) {
+                const extractedId = match[1];
+                explicitIdChecked = true;
+                console.log(`[API-${requestId}] Check: Testing existence of ${check.label} '${extractedId}'...`);
                 
-                // Fetch ~5 valid samples
-                const sampleQuery = `SELECT billingDocument FROM billing_document_headers LIMIT 5;`;
-                const sampleResult = await withTimeout(executeQuery(sampleQuery), 2000, 'DB Samples Fetch');
-                const suggestions = sampleResult.success ? sampleResult.rows.map(r => r.billingDocument) : [];
+                const checkResult = await withTimeout(
+                    executeQuery(`SELECT ${check.column} FROM ${check.table} WHERE ${check.column} = '${extractedId}' LIMIT 1`),
+                    2000, 'DB Existence Check'
+                );
                 
-                return {
-                    success: true,
-                    summary: `Billing document '${extractedId}' was not found in the dataset.`,
-                    reason: 'INVALID_ID',
-                    suggestions: suggestions,
-                    rowCount: 0,
-                    keyFields: [],
-                    executionTimeMs: 0,
-                    generatedSql: rawSql,
-                    data: [],
-                    graph: { nodes: [], edges: [] }
-                };
+                if (checkResult.success && checkResult.rowCount === 0) {
+                    console.log(`[API-${requestId}] Check: Invalid ${check.label} ID: ${extractedId}`);
+                    const sampleResult = await withTimeout(
+                        executeQuery(`SELECT ${check.column} FROM ${check.table} ORDER BY RANDOM() LIMIT 5`),
+                        2000, 'DB Samples Fetch'
+                    );
+                    const suggestions = sampleResult.success ? sampleResult.rows.map(r => r[check.column]) : [];
+                    
+                    return {
+                        success: true,
+                        summary: `${check.label} '${extractedId}' was not found in the dataset.`,
+                        reason: 'INVALID_ID',
+                        suggestions: suggestions,
+                        rowCount: 0,
+                        keyFields: [],
+                        executionTimeMs: 0,
+                        generatedSql: rawSql,
+                        data: [],
+                        graph: { nodes: [], edges: [] }
+                    };
+                }
+                console.log(`[API-${requestId}] Check: ${check.label} '${extractedId}' exists. Proceeding.`);
+                break; // Only check the first matched ID type
             }
-            console.log(`[API-${requestId}] Check: Billing document '${extractedId}' exists. Proceeding to evaluate flow.`);
         }
 
         // 4.6. Check if specific customer exists in DB
         const custMatch = rawSql.match(/soldToParty\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i);
-        let explicitCustChecked = false;
-        let extractedCustId = null;
 
         if (custMatch && custMatch[1]) {
             extractedCustId = custMatch[1];
             explicitCustChecked = true;
             console.log(`[API-${requestId}] Check: Testing existence of customer '${extractedCustId}'...`);
 
-            const custCheckQuery = `SELECT salesOrder FROM sales_order_headers WHERE soldToParty = '${extractedCustId}' LIMIT 1;`;
-            const custCheckResult = await withTimeout(executeQuery(custCheckQuery), 2000, 'DB Customer Check');
+            const custCheckResult = await withTimeout(
+                executeQuery(`SELECT salesOrder FROM sales_order_headers WHERE soldToParty = '${extractedCustId}' LIMIT 1`),
+                2000, 'DB Customer Check'
+            );
 
             if (custCheckResult.success && custCheckResult.rowCount === 0) {
                 console.log(`[API-${requestId}] Check: No records for customer '${extractedCustId}'.`);
@@ -358,11 +384,10 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
                 if (keys.length === 1) {
                     const metricKey = keys[0];
                     return {
-                        data: {
-                            id: `agg_node_${i}`,
-                            label: `Total ${metricKey}: ${row[metricKey]}`,
-                            type: 'Aggregation'
-                        }
+                        id: `agg_node_${i}`,
+                        label: `Total ${metricKey}: ${row[metricKey]}`,
+                        type: 'Aggregation',
+                        properties: row
                     };
                 }
 
@@ -387,7 +412,6 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
                     nodeType = entityKey.charAt(0).toUpperCase() + entityKey.slice(1);
                 }
 
-                // Format: "Customer 100017 (totalNetAmount: 5000)"
                 const labelStr = `${nodeType} ${row[entityKey]} (${aggKey}: ${row[aggKey]})`;
 
                 return {
@@ -421,10 +445,12 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         }
         if (fallbackApplied) {
             finalResponse.fallbackApplied = true;
-            if (explicitCustChecked) {
-                finalResponse.summary = `Partial flow found for customer '${extractedCustId}' — some stages (delivery, billing, or payment) are missing.`;
-            } else {
-                finalResponse.summary = "Partial flow recovered using relaxed joins";
+            if (!nlAnswer) {
+                if (explicitCustChecked) {
+                    finalResponse.summary = `Partial flow found for customer '${extractedCustId}' — some stages (delivery, billing, or payment) are missing.`;
+                } else {
+                    finalResponse.summary = "Partial flow recovered using relaxed joins";
+                }
             }
         }
 
