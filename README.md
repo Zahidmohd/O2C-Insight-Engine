@@ -85,6 +85,59 @@ frontend/
 
 ---
 
+## Graph Modeling
+
+The system models SAP Order-to-Cash as a **directed graph of business documents**.
+
+### Core Nodes
+- **Customer** — Business partner who initiates the order
+- **Sales Order** — Purchase request from the customer
+- **Delivery** — Physical shipment of goods
+- **Billing Document** — Invoice generated for the delivery
+- **Journal Entry** — Financial posting in accounts receivable
+- **Payment** — Cash receipt clearing the journal entry
+
+### Edge Types (Relationships)
+| Edge | From → To | Meaning |
+|---|---|---|
+| ORDERED | Customer → SalesOrder | Customer placed the order |
+| FULFILLED_BY | SalesOrder → Delivery | Order shipped |
+| BILLED_AS | Delivery → BillingDocument | Shipment invoiced |
+| POSTED_AS | BillingDocument → JournalEntry | Invoice posted to accounting |
+| CLEARED_BY | JournalEntry → Payment | Payment received |
+| BILLED_TO | BillingDocument → Customer | Invoice sent to customer |
+
+Item-level tables (e.g., `billing_document_items`, `outbound_delivery_items`) are used **only for join correctness** and are excluded from graph visualization to maintain clarity.
+
+---
+
+## Demo
+
+### Graph Visualization
+![Graph View](./Query.png)
+
+### Node Tooltip
+![Tooltip View](./Tooltip.png)
+
+---
+
+## Example Queries
+
+The system supports a wide range of natural language queries:
+
+| Query Type | Example |
+|---|---|
+| **Full Trace** | Trace full flow for billing document 90504204 |
+| **Broken Flows** | Find sales orders that were delivered but not billed |
+| **Aggregation** | Which products have the most billing documents? |
+| **Customer Lookup** | Show all orders for customer 320000083 |
+| **Reverse Trace** | Find journal entry for billing document 90504248 |
+| **Cancelled Docs** | Show all cancelled billing documents |
+| **Missing Links** | Show billing documents without journal entry |
+| **Top-N** | Top 5 customers by total billing amount |
+
+---
+
 ## Key Design Decisions
 
 | Decision | Rationale |
@@ -222,6 +275,31 @@ This enables end-to-end tracing from UI to database.
 19 JSONL tables from SAP S/4HANA Order-to-Cash process:
 - **10 Transactional:** sales_order_headers/items, outbound_delivery_headers/items, billing_document_headers/items/cancellations, journal_entry_items, payments, schedule_lines
 - **9 Master Data:** business_partners, addresses, customer_company/sales_area_assignments, products, product_descriptions, plants, product_plants, product_storage_locations
+
+---
+
+## Hallucination Prevention
+
+All responses are **grounded in executed SQL results**. The system does not generate answers without data backing.
+
+| Layer | Mechanism |
+|---|---|
+| **Pre-LLM** | Intent + domain validation rejects off-topic queries before any LLM call |
+| **SQL Generation** | Prompt includes exact schema, validated joins, and few-shot examples — no room for invented tables/columns |
+| **Post-LLM** | Generated SQL is validated against a safety blocklist; only SELECT allowed |
+| **Execution** | SQL runs against real data — if 0 rows, system reports "no data found" instead of fabricating |
+| **NL Answer** | Second LLM call receives actual query results as input — answer must reference real values |
+| **ID Checks** | Document IDs are verified against the database before query execution; invalid IDs get helpful suggestions |
+
+---
+
+## Limitations
+
+- **LLM Non-Determinism** — SQL generation may occasionally vary across runs for the same query; few-shot examples mitigate but don't fully eliminate this
+- **No Conversation Memory** — Each query is independent; follow-up questions don't have prior context
+- **Single-User SQLite** — Optimized for local development; not designed for high concurrency
+- **Cold Start Latency** — First LLM call after idle period may take 10-15s due to API cold starts
+- **LIMIT 100** — Results capped at 100 rows to prevent payload overload
 
 ---
 
