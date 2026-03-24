@@ -239,7 +239,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
         }
 
         // 4.6. Check if specific customer exists in DB
-        const custMatch = rawSql.match(/soldToParty\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i);
+        const custMatch = rawSql.match(/(?:soldToParty|\.customer)\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i);
 
         if (custMatch && custMatch[1]) {
             extractedCustId = custMatch[1];

@@ -125,7 +125,7 @@ function App() {
             'target-arrow-shape': 'triangle',
             'arrow-scale': 0.5,
             'curve-style': 'bezier',
-            'label': showLabels ? 'data(type)' : '',
+            'label': 'data(type)',
             'font-size': '7px',
             'text-rotation': 'autorotate',
             'text-background-opacity': 1,
@@ -219,6 +219,11 @@ function App() {
         setSelectedNode(null);
       }
     });
+
+    // Apply current label visibility state
+    if (!showLabels && cyRef.current) {
+      cyRef.current.edges().addClass('hide-label');
+    }
 
     // Highlight specific queried nodes
     if (highlightNodes && highlightNodes.length > 0) {
@@ -454,6 +459,18 @@ function App() {
                     {!r.nlAnswer && r.summary && (
                       <div className={r.reason === 'INVALID_ID' ? 'chat-error' : r.reason === 'NO_FLOW' ? 'chat-info' : 'chat-welcome'}>
                         {r.summary}
+                      </div>
+                    )}
+                    {r.reason === 'INVALID_ID' && r.suggestions && r.suggestions.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: '12px', color: '#6b6b80', marginBottom: 6 }}>Try a valid document:</div>
+                        <div className="suggestion-chips">
+                          {r.suggestions.map(s => (
+                            <button key={s} className="suggestion-chip" onClick={() => setQuery(`Trace full flow for billing document ${s}`)}>
+                              {s}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )}
                     {r.rowCount > 0 && (

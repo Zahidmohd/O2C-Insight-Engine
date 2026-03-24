@@ -1,5 +1,3 @@
-const db = require('../db/connection');
-
 /**
  * Validates the generated SQL for safety constraints.
  * Returning true if safe, throws Error if invalid or unsafe.
