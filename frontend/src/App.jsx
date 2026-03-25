@@ -257,7 +257,7 @@ function App() {
     }
 
     try {
-      const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      const API_BASE = import.meta.env.VITE_API_URL || '';
       const response = await axios.post(`${API_BASE}/api/query`, { query });
       const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer } = response.data;
 

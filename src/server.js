@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const queryRoutes = require('./routes/queryRoutes');
 
 const app = express();
@@ -9,6 +10,10 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Serve frontend static files in production
+const frontendDist = path.join(__dirname, '../frontend/dist');
+app.use(express.static(frontendDist));
+
 // Request logging middleware
 app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
@@ -17,6 +22,11 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/api', queryRoutes);
+
+// SPA catch-all — serve index.html for any non-API route
+app.get('*', (req, res) => {
+    res.sendFile(path.join(frontendDist, 'index.html'));
+});
 
 // Global Error Handler
 app.use((err, req, res, next) => {

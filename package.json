@@ -6,7 +6,8 @@
     "doc": "docs"
   },
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node src/db/loader.js && node src/server.js",
+    "build": "cd frontend && npm install && npm run build",
     "test": "node tests/smokeTest.js"
   },
   "keywords": [],
