@@ -82,9 +82,15 @@ async function loadTable(tableConfig) {
           }
         }
 
-        // Convert null/undefined to null, empty string stays empty string
+        // Convert values to types accepted by better-sqlite3 (number, string, bigint, buffer, null)
         const keys = Object.keys(record);
-        const values = keys.map(k => record[k] === null || record[k] === undefined ? null : record[k]);
+        const values = keys.map(k => {
+          const v = record[k];
+          if (v === null || v === undefined) return null;
+          if (typeof v === 'boolean') return v ? '1' : '0';
+          if (typeof v === 'object') return JSON.stringify(v);
+          return v;
+        });
 
         const placeholders = keys.map(() => '?').join(', ');
         const sql = `INSERT OR IGNORE INTO ${tableConfig.name} (${keys.join(', ')}) VALUES (${placeholders})`;

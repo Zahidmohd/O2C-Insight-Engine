@@ -1,60 +1,32 @@
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
 const path = require('path');
 
 const dbPath = path.join(__dirname, '../../sap_otc.db');
 
-const db = new sqlite3.Database(dbPath, (err) => {
-    if (err) {
-        console.error('Error opening database connection:', err.message);
-        process.exit(1);
-    }
-    
-    // Enable foreign keys
-    db.run('PRAGMA foreign_keys = ON;', (err) => {
-        if (err) {
-            console.error('Error enabling foreign keys:', err.message);
-        }
-    });
-});
+const db = new Database(dbPath);
 
-// Helper function to make db.run return a Promise
+// Enable foreign keys and WAL mode for performance
+db.pragma('foreign_keys = ON');
+db.pragma('journal_mode = WAL');
+
+// Async-compatible wrappers (better-sqlite3 is synchronous,
+// but wrapping in Promises keeps the rest of the codebase unchanged)
+
 db.runAsync = function (sql, params = []) {
-    return new Promise((resolve, reject) => {
-        this.run(sql, params, function (err) {
-            if (err) reject(err);
-            else resolve(this);
-        });
-    });
+    return Promise.resolve(this.prepare(sql).run(...params));
 };
 
-// Helper function to make db.all return a Promise
 db.allAsync = function (sql, params = []) {
-    return new Promise((resolve, reject) => {
-        this.all(sql, params, (err, rows) => {
-            if (err) reject(err);
-            else resolve(rows);
-        });
-    });
+    return Promise.resolve(this.prepare(sql).all(...params));
 };
 
-// Helper function to make db.get return a Promise
 db.getAsync = function (sql, params = []) {
-    return new Promise((resolve, reject) => {
-        this.get(sql, params, (err, row) => {
-            if (err) reject(err);
-            else resolve(row);
-        });
-    });
+    return Promise.resolve(this.prepare(sql).get(...params));
 };
 
-// Helper to execute multiple queries (e.g., from schema.sql)
+// exec handles multiple semicolon-separated statements (e.g., schema.sql)
 db.execAsync = function (sql) {
-    return new Promise((resolve, reject) => {
-        this.exec(sql, function (err) {
-            if (err) reject(err);
-            else resolve();
-        });
-    });
+    return Promise.resolve(this.exec(sql));
 };
 
 module.exports = db;
