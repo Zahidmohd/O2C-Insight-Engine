@@ -68,13 +68,18 @@ function cleanResponse(responseBody) {
 }
 
 /**
- * Builds a prompt for natural language answer generation from query results
+ * Builds a prompt for natural language answer generation from query results.
+ * Accepts optional business context (from knowledge base) for HYBRID queries.
  */
-function buildNLAnswerPrompt(userQuestion, rows, rowCount) {
+function buildNLAnswerPrompt(userQuestion, rows, rowCount, context = null) {
     // Limit rows sent to LLM to keep context window small
     const MAX_ROWS_FOR_NL = 10;
     const truncated = rows.slice(0, MAX_ROWS_FOR_NL);
     const rowsJson = JSON.stringify(truncated, null, 2);
+
+    const contextBlock = context
+        ? `\nAdditional Business Context:\n${context}\n`
+        : '';
 
     return `You are a data analyst for an SAP Order-to-Cash system.
 
@@ -82,7 +87,7 @@ The user asked: "${userQuestion}"
 
 The query returned ${rowCount} row(s). Here are the results (up to ${MAX_ROWS_FOR_NL} shown):
 ${rowsJson}
-
+${contextBlock}
 Based ONLY on this data, write a concise natural language answer to the user's question.
 Rules:
 - Be direct and factual. Do not speculate or add information not present in the data.
@@ -140,10 +145,12 @@ async function generateNLAnswerWithOpenRouter(prompt) {
 }
 
 /**
- * Orchestrates NL answer generation with Groq primary, OpenRouter fallback
+ * Orchestrates NL answer generation with Groq primary, OpenRouter fallback.
+ * context (optional): business explanation string from knowledgeBase, injected
+ * into the prompt for HYBRID queries. Pass null for pure SQL queries.
  */
-async function generateNLAnswer(userQuestion, rows, rowCount) {
-    const prompt = buildNLAnswerPrompt(userQuestion, rows, rowCount);
+async function generateNLAnswer(userQuestion, rows, rowCount, context = null) {
+    const prompt = buildNLAnswerPrompt(userQuestion, rows, rowCount, context);
 
     try {
         console.log(`[LLM-NL] Attempting Groq for NL answer...`);

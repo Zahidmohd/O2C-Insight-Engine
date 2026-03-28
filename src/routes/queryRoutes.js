@@ -37,8 +37,11 @@ router.post('/query', async (req, res) => {
             });
         }
 
-        // Pass to engine
-        const result = await queryService.processQuery(trimmedQuery, requestId);
+        // SQL visibility flag — defaults to false (SQL hidden from response)
+        const includeSql = req.body.includeSql === true;
+
+        // Pass to engine with options
+        const result = await queryService.processQuery(trimmedQuery, requestId, { includeSql });
 
         // Format and Return explicitly exactly as required
         if (!result.success && result.error) {
@@ -53,16 +56,20 @@ router.post('/query', async (req, res) => {
             success: true,
             requestId,
             query: trimmedQuery,
-            sql: result.generatedSql,
-            rowCount: result.rowCount, // Exact total matching
-            data: result.data || [],   // Protected list, max length 100
+            sql: result.generatedSql,                          // undefined when includeSql=false
+            rowCount: result.rowCount,                         // Exact total matching
+            data: result.data || [],                           // Protected list, max length 100
             graph: result.graph || { nodes: [], edges: [] },
             highlightNodes: result.highlightNodes || [],
             executionTimeMs: Number(result.executionTimeMs),
             reason: result.reason,
+            message: result.message || null,                   // Zero-row human-readable message
             suggestions: result.suggestions,
             summary: result.summary,
-            nlAnswer: result.nlAnswer || null
+            nlAnswer: result.nlAnswer || null,
+            queryType: result.queryType,                       // "SQL" | "HYBRID" | "RAG"
+            explanation: result.explanation || null,           // { intent, entities, strategy }
+            confidence: result.confidence ?? null              // 0.0–1.0 reliability score
         });
 
     } catch (e) {

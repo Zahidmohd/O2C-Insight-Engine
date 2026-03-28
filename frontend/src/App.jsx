@@ -12,6 +12,7 @@ function App() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [showLabels, setShowLabels] = useState(true);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const [showSql, setShowSql] = useState(false);
 
   const cyRef = useRef(null);
   const cyContainerRef = useRef(null);
@@ -258,8 +259,8 @@ function App() {
 
     try {
       const API_BASE = import.meta.env.VITE_API_URL || '';
-      const response = await axios.post(`${API_BASE}/api/query`, { query });
-      const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer } = response.data;
+      const response = await axios.post(`${API_BASE}/api/query`, { query, includeSql: showSql });
+      const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, message } = response.data;
 
       if (success) {
         const info = {
@@ -271,7 +272,11 @@ function App() {
           reason,
           suggestions,
           summary,
-          nlAnswer: nlAnswer || null
+          nlAnswer: nlAnswer || null,
+          sql: sql || null,
+          explanation: explanation || null,
+          confidence: confidence ?? null,
+          message: message || null
         };
         setResultInfo(info);
 
@@ -461,6 +466,10 @@ function App() {
                         {r.summary}
                       </div>
                     )}
+                    {/* Zero-data message — shown when no nlAnswer and backend provides a reason message */}
+                    {r.message && !r.nlAnswer && (
+                      <div className="chat-info">{r.message}</div>
+                    )}
                     {r.reason === 'INVALID_ID' && r.suggestions && r.suggestions.length > 0 && (
                       <div>
                         <div style={{ fontSize: '12px', color: '#6b6b80', marginBottom: 6 }}>Try a valid document:</div>
@@ -471,6 +480,39 @@ function App() {
                             </button>
                           ))}
                         </div>
+                      </div>
+                    )}
+                    {/* Confidence score */}
+                    {r.confidence != null && (
+                      <div className="confidence-text">Confidence: {Math.round(r.confidence * 100)}%</div>
+                    )}
+                    {/* Explanation — how the query was answered */}
+                    {r.explanation && (
+                      <div className="result-card">
+                        <div className="result-card-title">How this was answered</div>
+                        <div className="result-row">
+                          <span className="result-label">Intent</span>
+                          <span className="result-value">{r.explanation.intent}</span>
+                        </div>
+                        {r.explanation.entities && r.explanation.entities.length > 0 && (
+                          <div className="result-row">
+                            <span className="result-label">Entities</span>
+                            <span className="result-value">
+                              {r.explanation.entities.map(e => e.replace(/_/g, ' ')).join(', ')}
+                            </span>
+                          </div>
+                        )}
+                        <div className="result-row">
+                          <span className="result-label">Strategy</span>
+                          <span className="result-value">{r.explanation.strategy}</span>
+                        </div>
+                      </div>
+                    )}
+                    {/* Generated SQL — only when includeSql was true */}
+                    {(r.sql || r.generatedSql) && (
+                      <div className="result-card">
+                        <div className="result-card-title">Generated SQL (Debug View)</div>
+                        <pre className="sql-block">{r.sql || r.generatedSql}</pre>
                       </div>
                     )}
                     {r.rowCount > 0 && (
@@ -516,6 +558,12 @@ function App() {
             <div className="chat-status">
               <span className={`status-dot ${isLoading ? 'busy' : ''}`}></span>
               {isLoading ? 'Processing query...' : 'Graph Agent is awaiting instructions'}
+            </div>
+            <div className="sql-toggle">
+              <label>
+                <input type="checkbox" checked={showSql} onChange={e => setShowSql(e.target.checked)} />
+                Show SQL (for developers)
+              </label>
             </div>
             <form onSubmit={handleSearch} className="chat-input-wrapper">
               <textarea

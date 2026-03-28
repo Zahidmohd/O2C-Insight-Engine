@@ -2,6 +2,10 @@
  * Prompts construction for the natural language to SQL engine.
  */
 
+// Domain keyword list sourced from central config (used by isDomainQuery and classifiers).
+// Exported here so consumers can import from one place if needed.
+const { domainKeywords } = require('../config/datasetConfig');
+
 // This schema omits unnecessary tables or columns to save context window tokens,
 // focusing on the validated core O2C flow and critical master data.
 const SCHEMA_CONTEXT = `
@@ -118,5 +122,6 @@ function buildPrompt(userQuery) {
 
 module.exports = {
     buildPrompt,
-    SCHEMA_CONTEXT
+    SCHEMA_CONTEXT,
+    domainKeywords
 };

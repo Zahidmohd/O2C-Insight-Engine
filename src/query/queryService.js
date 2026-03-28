@@ -3,6 +3,37 @@ const { getSqlFromLLM, generateNLAnswer } = require('./llmClient');
 const { validateSql } = require('./validator');
 const { executeQuery } = require('./sqlExecutor');
 const { extractGraph } = require('./graphExtractor');
+const { classifyQuery } = require('./queryClassifier');
+const { retrieveContext } = require('../rag/knowledgeBase');
+const { domainKeywords, entities: entityKeywords } = require('../config/datasetConfig');
+
+/**
+ * In-memory response cache — avoids burning LLM tokens on repeated identical queries.
+ * TTL: 5 minutes. Keyed by normalized query + includeSql flag so toggling
+ * "Show SQL" always fetches a fresh response with SQL included.
+ */
+const responseCache = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+function cacheKey(query, includeSql) {
+    return query.toLowerCase().trim() + (includeSql ? ':sql' : '');
+}
+
+function getCached(query, includeSql) {
+    const key = cacheKey(query, includeSql);
+    const entry = responseCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+        responseCache.delete(key);
+        return null;
+    }
+    return entry.response;
+}
+
+function setCached(query, includeSql, response) {
+    const key = cacheKey(query, includeSql);
+    responseCache.set(key, { response, timestamp: Date.now() });
+}
 
 /**
  * Validates domain safety before spending API tokens
@@ -16,7 +47,9 @@ function isIntentValid(query) {
         'get', 'fetch', 'highest', 'lowest', 'give', 'total', 'average', 'identify',
         'all', 'are', 'is', 'does', 'do', 'has', 'have', 'between', 'for',
         'compare', 'check', 'display', 'search', 'broken', 'incomplete', 'cancelled',
-        'who', 'where', 'when', 'many', 'much'
+        'who', 'where', 'when', 'many', 'much',
+        'most', 'least', 'best', 'worst', 'popular', 'frequent', 'biggest', 'smallest',
+        'largest', 'highest', 'lowest', 'recent', 'latest', 'oldest', 'first', 'last'
     ];
     
     // Must contain at least one valid intent word structurally
@@ -37,21 +70,9 @@ function isIntentValid(query) {
 
 function isDomainQuery(query) {
     const queryLower = query.toLowerCase();
-    
-    // Improved Domain Guardrail List
-    const mandatoryDomainKeywords = [
-        'order', 'sales', 'delivery', 'bill', 'invoice', 
-        'journal', 'payment', 'customer', 'product', 'plant',
-        'document', 'item', 'amount', 'clearing', 'flow',
-        'company', 'fiscal', 'accounting', 'partner',
-        'trace', 'material', 'address', 'status', 'cancelled',
-        'billed', 'delivered', 'posted', 'cleared', 'entry',
-        'shipping', 'quantity', 'currency', 'net', 'total',
-        'o2c', 'sap', 'transaction', 'record', 'data'
-    ];
-    
-    // Check if query contains at least one domain keyword
-    const matchedKeywords = mandatoryDomainKeywords.filter(kw => queryLower.includes(kw));
+
+    // Domain keywords sourced from central config (datasetConfig.js)
+    const matchedKeywords = domainKeywords.filter(kw => queryLower.includes(kw));
 
     if (matchedKeywords.length === 0) {
         return {
@@ -148,10 +169,112 @@ function formatResponse(result, rawSql) {
 }
 
 /**
+ * Infers query intent, extracts mentioned entities, and determines execution strategy.
+ * Used to populate the explanation object in every SQL/HYBRID response.
+ */
+function buildExplanation(query, sql) {
+    const lower = query.toLowerCase();
+
+    // Infer intent from query keywords
+    let intent = 'lookup';
+    if (/trace|flow|chain|end.to.end/.test(lower)) intent = 'trace';
+    else if (/count|total|sum|average|group|top\s+\d|most|least/.test(lower)) intent = 'aggregation';
+    else if (/find|list|show|get/.test(lower)) intent = 'list';
+    else if (/why|missing|without|not billed|not delivered/.test(lower)) intent = 'gap-analysis';
+
+    // Extract entities from the NL query text
+    const entitiesFromQuery = entityKeywords.filter(e => lower.includes(e.toLowerCase()));
+
+    // Also infer entities from tables referenced in the generated SQL
+    const sqlLower = (sql || '').toLowerCase();
+    const tableEntityMap = [
+        { table: 'sales_order_headers',                       entity: 'sales order' },
+        { table: 'outbound_delivery',                         entity: 'delivery' },
+        { table: 'billing_document',                          entity: 'billing' },
+        { table: 'journal_entry_items_accounts_receivable',   entity: 'journal entry' },
+        { table: 'payments_accounts_receivable',              entity: 'payment' },
+        { table: 'business_partners',                         entity: 'business partner' },
+    ];
+    const entitiesFromSql = tableEntityMap
+        .filter(m => sqlLower.includes(m.table))
+        .map(m => m.entity);
+
+    // Merge, deduplicate, preserve order (query-mentioned first)
+    const entities = [...new Set([...entitiesFromQuery, ...entitiesFromSql])];
+
+    // Determine strategy from intent and SQL shape
+    let strategy = 'lookup with filters';
+    if (intent === 'trace') strategy = 'multi-hop join across O2C flow';
+    else if (intent === 'aggregation') strategy = 'aggregation query with GROUP BY';
+    else if (intent === 'gap-analysis') strategy = 'gap detection using LEFT JOIN with NULL check';
+    else if (sql && /JOIN/i.test(sql)) strategy = 'multi-table join query';
+
+    return { intent, entities, strategy };
+}
+
+/**
+ * Produces a reliability score (0.0–1.0) for the response.
+ * RAG responses are always 1.0 (direct KB lookup, no SQL uncertainty).
+ * SQL/HYBRID scores are reduced by fallback usage, zero rows, or aggregation uncertainty.
+ */
+function calculateConfidence({ queryType, fallbackApplied, rowCount, isAggregation }) {
+    if (queryType === 'RAG') return 1.0;
+    let score = 1.0;
+    if (fallbackApplied) score -= 0.2;
+    if (rowCount === 0) score -= 0.4;
+    if (isAggregation) score -= 0.1;
+    return Math.max(0, Math.min(1, parseFloat(score.toFixed(2))));
+}
+
+/**
  * Orchestrates the full Natural Language -> SQL -> Result pipeline
  */
-async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
+async function processQuery(naturalLanguageQuery, requestId = 'dev-local', options = {}) {
     console.log(`\n[API-${requestId}] Query Service Evaluation: "${naturalLanguageQuery}"`);
+
+    // 0a. Cache check — skip LLM entirely for repeated identical queries
+    const cached = getCached(naturalLanguageQuery, options.includeSql);
+    if (cached) {
+        console.log(`[API-${requestId}] Cache hit — returning cached response.`);
+        return cached;
+    }
+
+    // 0b. Classify query type — HYBRID checked before RAG to avoid misrouting
+    const queryType = classifyQuery(naturalLanguageQuery);
+    console.log(`[API-${requestId}] Query classified as: ${queryType}`);
+
+    // RAG path: explanation-only, no SQL execution needed
+    if (queryType === 'RAG') {
+        // Guard: reject off-topic RAG queries that contain no O2C domain keywords
+        const ragDomainCheck = isDomainQuery(naturalLanguageQuery);
+        if (!ragDomainCheck.valid) {
+            console.warn(`[API-${requestId}] RAG Domain Check Failed: Off-topic query blocked.`);
+            return {
+                success: false,
+                error: { message: ragDomainCheck.message, type: 'VALIDATION_ERROR' },
+                query: naturalLanguageQuery
+            };
+        }
+        const context = retrieveContext(naturalLanguageQuery);
+        console.log(`[API-${requestId}] RAG response dispatched.`);
+        return {
+            success: true,
+            queryType: 'RAG',
+            reason: 'RAG_RESPONSE',
+            nlAnswer: context || 'No specific context found for this topic in the O2C knowledge base.',
+            rowCount: 0,
+            data: [],
+            graph: { nodes: [], edges: [] },
+            highlightNodes: [],
+            summary: 'Explanation retrieved from knowledge base.',
+            confidence: 1.0,
+            explanation: {
+                intent: 'concept explanation',
+                entities: [],
+                strategy: 'knowledge retrieval',
+            },
+        };
+    }
 
     // 1. Guardrails
     const intentCheck = isIntentValid(naturalLanguageQuery);
@@ -224,11 +347,12 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
                         success: true,
                         summary: `${check.label} '${extractedId}' was not found in the dataset.`,
                         reason: 'INVALID_ID',
+                        message: 'No records found for the given query.',
                         suggestions: suggestions,
                         rowCount: 0,
                         keyFields: [],
                         executionTimeMs: 0,
-                        generatedSql: rawSql,
+                        generatedSql: options.includeSql ? rawSql : undefined,
                         data: [],
                         graph: { nodes: [], edges: [] }
                     };
@@ -257,10 +381,11 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
                     success: true,
                     summary: `No records found for customer '${extractedCustId}' in the dataset.`,
                     reason: 'INVALID_ID',
+                    message: 'No records found for the given query.',
                     rowCount: 0,
                     keyFields: [],
                     executionTimeMs: 0,
-                    generatedSql: rawSql,
+                    generatedSql: options.includeSql ? rawSql : undefined,
                     data: [],
                     graph: { nodes: [], edges: [] }
                 };
@@ -340,20 +465,29 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
                 success: true,
                 summary: emptySummary,
                 reason: 'NO_FLOW',
+                message: 'No records found for the given query.',
                 rowCount: 0,
                 keyFields: [],
                 executionTimeMs: Number(dbResult.executionTimeMs),
-                generatedSql: rawSql,
+                generatedSql: options.includeSql ? rawSql : undefined,
                 data: [],
                 graph: { nodes: [], edges: [] }
             };
         }
 
-        // 5.5. Generate Natural Language Answer from results
+        // 5.5. For HYBRID queries, retrieve business context to enrich the NL answer.
+        // null is handled gracefully by generateNLAnswer — no degradation on KB miss.
+        let ragContext = null;
+        if (queryType === 'HYBRID') {
+            ragContext = retrieveContext(naturalLanguageQuery);
+            console.log(`[API-${requestId}] HYBRID: KB context ${ragContext ? 'found' : 'not found — proceeding with SQL answer only'}.`);
+        }
+
+        // 5.6. Generate Natural Language Answer from results
         let nlAnswer = null;
         try {
             nlAnswer = await withTimeout(
-                generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount),
+                generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount, ragContext),
                 20000,
                 'NL Answer Generation'
             );
@@ -362,7 +496,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
             console.warn(`[API-${requestId}] NL answer generation failed:`, nlErr.message);
         }
 
-        // 5.6. Detect Aggregation Queries (CRITICAL UI CONTROL)
+        // 5.7. Detect Aggregation Queries (CRITICAL UI CONTROL)
         const upperSql = rawSql.toUpperCase();
         const isAggregation = upperSql.includes('COUNT(') || 
                               upperSql.includes('SUM(') || 
@@ -454,12 +588,31 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local') {
             }
         }
 
-        // Required Final Logging Check 
+        // 7. Attach explanation, confidence, queryType to all SQL/HYBRID responses
+        finalResponse.explanation = buildExplanation(naturalLanguageQuery, rawSql);
+        finalResponse.confidence = calculateConfidence({
+            queryType,
+            fallbackApplied: finalResponse.fallbackApplied || false,
+            rowCount: finalResponse.rowCount || 0,
+            isAggregation: finalResponse.reason === 'AGGREGATION',
+        });
+        finalResponse.queryType = queryType; // "SQL" or "HYBRID"
+
+        // Strip SQL from response unless caller explicitly requested it
+        if (!options.includeSql) {
+            delete finalResponse.generatedSql;
+        }
+
+        // Required Final Logging Check
         console.log(`[API-${requestId}] Request completed.`);
         console.log(`- Query: ${naturalLanguageQuery}`);
         console.log(`- SQL: ${rawSql.replace(/\n/g, ' ')}`);
         console.log(`- Execution Time: ${finalResponse.executionTimeMs} ms`);
         console.log(`- Row Count: ${finalResponse.rowCount}`);
+        console.log(`- Confidence: ${finalResponse.confidence}`);
+
+        // Cache successful responses only
+        if (finalResponse.success) setCached(naturalLanguageQuery, options.includeSql, finalResponse);
 
         return finalResponse;
 
