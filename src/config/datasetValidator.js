@@ -107,7 +107,9 @@ function validateDataFiles(config, resolvedDataDir) {
         const dirPath = path.resolve(resolvedDataDir, dir);
 
         // Block path traversal — directory must stay within the data root
-        if (!dirPath.startsWith(resolvedDataDir)) {
+        // Use separator suffix to avoid prefix collisions (e.g. /app/data vs /app/datax)
+        const dataDirBoundary = resolvedDataDir.endsWith(path.sep) ? resolvedDataDir : resolvedDataDir + path.sep;
+        if (!dirPath.startsWith(dataDirBoundary) && dirPath !== resolvedDataDir) {
             throw new Error(`Invalid schema: directory "${dir}" for table "${t.name}" escapes the data directory.`);
         }
 

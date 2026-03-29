@@ -9,7 +9,9 @@ const BATCH_SIZE = 100;
 async function loadTable(tableConfig, dataDir) {
   const dirPath = path.resolve(dataDir, tableConfig.directory);
   // Prevent path traversal — resolved path must stay within the data directory
-  if (!dirPath.startsWith(dataDir)) {
+  // Use dataDir + sep to avoid prefix collisions (e.g. /app/data vs /app/datax)
+  const dataDirBoundary = dataDir.endsWith(path.sep) ? dataDir : dataDir + path.sep;
+  if (!dirPath.startsWith(dataDirBoundary) && dirPath !== dataDir) {
     console.error(`Path traversal blocked for table ${tableConfig.name}: ${dirPath}`);
     return 0;
   }
