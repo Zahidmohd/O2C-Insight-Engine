@@ -86,9 +86,15 @@ src/
 │   ├── queryService.js         # Full pipeline orchestrator
 │   └── graphExtractor.js       # Row → node/edge mapping (O2C + generic)
 ├── rag/
-│   └── knowledgeBase.js        # In-memory knowledge base for RAG queries
+│   ├── knowledgeBase.js        # Dual-path RAG: vector search + keyword fallback
+│   ├── vectorStore.js          # SQLite document/chunk tables + cosine similarity search
+│   ├── embeddingService.js     # Local HF embeddings (Xenova/all-MiniLM-L6-v2, 384-dim)
+│   ├── documentExtractor.js    # Text extraction from PDF, DOCX, TXT, MD
+│   ├── chunker.js              # Recursive character text splitter
+│   └── zipExtractor.js         # ZIP archive extraction for dataset uploads
 ├── routes/
-│   └── queryRoutes.js          # REST API endpoints + multer upload
+│   ├── queryRoutes.js          # REST API endpoints + multer upload
+│   └── documentRoutes.js       # Document upload/list/delete API
 └── server.js                   # Express server with security headers
 frontend/
 ├── src/
@@ -266,9 +272,9 @@ The system supports two ways to load datasets:
 Upload a JSON config file with `name`, `tables`, `relationships`, and `domainKeywords`. Full schema control.
 
 ### 2. Raw Data Upload (Non-Technical Users)
-Upload JSONL or CSV files through a multi-step wizard:
+Upload JSONL, CSV, or ZIP files through a multi-step wizard:
 
-1. **Upload** — Drop files, system auto-detects format (JSONL/CSV)
+1. **Upload** — Drop files (including ZIP archives containing multiple CSV/JSONL files), system auto-detects format
 2. **Schema Review** — Edit inferred table names, columns, primary keys
 3. **Relationship Review** — Accept/reject suggested joins with confidence scores
 4. **Confirm** — Name the dataset, system generates config and loads data
@@ -277,6 +283,36 @@ The onboarding pipeline uses deterministic heuristics (no LLM) for schema and re
 - **Primary key detection:** All-unique non-null columns, preferring `*Id`/`*Key`/`*Code` suffixes
 - **Relationship scoring:** Column name matching (+0.5), suffix pattern matching (+0.3), value overlap sampling (+0.5)
 - **Cardinality inference:** 1:1, 1:N, N:1, N:M from value distribution analysis
+
+---
+
+## Document RAG Pipeline
+
+The system supports uploading unstructured documents (PDF, DOCX, TXT, MD) to enhance the knowledge base. No additional API keys are needed — embeddings are generated locally.
+
+### Pipeline Flow
+
+```
+Upload Document → Extract Text → Chunk (500 chars, 50 overlap) → Embed (384-dim) → Store in SQLite
+```
+
+### Retrieval (Dual-Path)
+
+When a RAG or HYBRID query comes in:
+
+1. **Vector search** — If documents exist, embed the query and find top-5 chunks by cosine similarity (threshold ≥ 0.3)
+2. **Keyword fallback** — If no documents are uploaded or vector search returns nothing, fall back to the curated 10-entry SAP O2C knowledge base
+
+### Technical Details
+
+| Component | Implementation |
+|-----------|---------------|
+| **Embedding model** | Xenova/all-MiniLM-L6-v2 (384-dim, ONNX/WASM via @huggingface/transformers) |
+| **Text extraction** | pdf-parse (PDF), officeparser (DOCX), fs.readFile (TXT/MD) |
+| **Chunking** | Recursive character splitter with separator hierarchy: `\n\n` → `\n` → `. ` → ` ` |
+| **Vector store** | SQLite tables (`documents`, `document_chunks`) with JSON-serialized embeddings |
+| **Search** | Brute-force cosine similarity in JS (~5-15ms for <10K chunks) |
+| **Persistence** | Document tables survive dataset switches (excluded from DROP during onboarding) |
 
 ---
 
@@ -290,7 +326,8 @@ The onboarding pipeline uses deterministic heuristics (no LLM) for schema and re
 - **Provider Health Indicator** — Real-time status dot showing how many AI providers are healthy
 - **Query Metadata Badges** — Color-coded badges for query type (SQL/RAG/HYBRID), complexity (SIMPLE/MODERATE/COMPLEX), execution plan (LLM/RULE_BASED/FALLBACK), and confidence level
 - **Suggestion Chips** — When an invalid ID is entered or all LLMs fail, clickable alternatives are shown
-- **Dataset Upload Wizard** — Two-mode modal: config upload or raw data onboarding with schema/relationship review
+- **Dataset Upload Wizard** — Three-tab modal: config upload, raw data onboarding (with ZIP support), and document management
+- **Document RAG Upload** — Upload PDF/DOCX/TXT/MD documents to enhance the knowledge base; view and delete uploaded documents
 - **Show SQL Toggle** — Developer mode to see generated SQL
 - **Fit View / Hide Labels** — Floating graph controls
 - **Loading States** — Animated dot pulse during query processing
@@ -352,10 +389,19 @@ Returns real-time health status for all 5 LLM providers: scores, remaining reque
 Upload a JSON config to switch datasets.
 
 ### POST /api/dataset/upload/raw
-Upload raw JSONL/CSV files for schema inference. Returns `sessionId`, inferred `schema`, and `relationships`.
+Upload raw JSONL/CSV/ZIP files for schema inference. Returns `sessionId`, inferred `schema`, and `relationships`. ZIP files are automatically extracted and their contents processed alongside individual files.
 
 ### POST /api/dataset/upload/confirm
 Confirm onboarding session with user-edited schema/relationships to load the dataset.
+
+### POST /api/documents/upload
+Upload a document (PDF, DOCX, TXT, MD) for the RAG knowledge base. Extracts text, chunks it, generates embeddings locally using Hugging Face Transformers.js (Xenova/all-MiniLM-L6-v2), and stores chunks with 384-dim vectors in SQLite. Returns `{ documentId, title, chunkCount }`.
+
+### GET /api/documents
+List all uploaded documents with chunk counts and metadata.
+
+### DELETE /api/documents/:id
+Delete a document and all its chunks from the vector store.
 
 ---
 
@@ -380,7 +426,7 @@ All responses are **grounded in executed SQL results**. The system does not gene
 | **Execution** | SQL runs against real data — 0 rows = "no data found", not fabrication |
 | **NL Answer** | Second LLM call receives actual query results as input |
 | **ID Checks** | Document IDs verified against database before query execution |
-| **RAG Grounding** | Knowledge base answers sourced from curated domain content |
+| **RAG Grounding** | Knowledge base answers sourced from uploaded documents (vector search) or curated domain content (keyword fallback) |
 
 ---
 

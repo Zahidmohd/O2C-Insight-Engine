@@ -241,10 +241,11 @@ Users provide a JSON config file specifying:
 
 ### 7.2 Raw Data Upload (New)
 
-Users upload JSONL/CSV files and the system auto-generates a config:
+Users upload JSONL/CSV/ZIP files and the system auto-generates a config:
 
 ```
-Upload files (.jsonl/.csv)
+Upload files (.jsonl/.csv/.zip)
+    │ (ZIP files auto-extracted → CSV/JSONL contents merged)
     │
     ▼
 Schema Inference
@@ -283,9 +284,12 @@ Config Generation
 | `POST` | `/api/query` | Natural language query → SQL → results |
 | `GET` | `/api/dataset/info` | Active dataset metadata (tables, rows, name) |
 | `POST` | `/api/dataset/upload` | Upload dataset config JSON |
-| `POST` | `/api/dataset/upload/raw` | Upload raw JSONL/CSV files for onboarding |
+| `POST` | `/api/dataset/upload/raw` | Upload raw JSONL/CSV/ZIP files for onboarding |
 | `POST` | `/api/dataset/upload/confirm` | Confirm schema + relationships, finalize dataset |
 | `GET` | `/api/providers` | LLM provider health status |
+| `POST` | `/api/documents/upload` | Upload document (PDF/DOCX/TXT/MD) → extract → chunk → embed → store |
+| `GET` | `/api/documents` | List uploaded documents with chunk counts |
+| `DELETE` | `/api/documents/:id` | Delete document and all its chunks |
 
 ### 8.1 Query Response Shape
 
@@ -311,14 +315,43 @@ Config Generation
 
 ## 9. RAG Knowledge Base
 
-The knowledge base provides answers to domain questions without SQL:
+The knowledge base uses dual-path retrieval for domain questions:
 
-- **Matching:** TF-IDF-style keyword scoring against knowledge entries
-- **Threshold:** Minimum score required to return a RAG answer
-- **Fallback:** If no match, the query is re-routed to SQL pipeline
-- **Hybrid mode:** For HYBRID queries, both RAG answer and SQL results are combined
+### 9.1 Vector Search (Primary)
 
-Knowledge entries are defined per dataset. The default O2C dataset includes entries about SAP concepts, O2C process flow, document types, and status codes.
+When documents have been uploaded via `/api/documents/upload`:
+
+```
+Query → Embed (Xenova/all-MiniLM-L6-v2, 384-dim) → Cosine similarity vs all chunks → Top 5 results
+```
+
+- **Embedding model:** @huggingface/transformers (local, no API key needed)
+- **Storage:** SQLite tables (`documents`, `document_chunks`) with JSON-serialized embeddings
+- **Search:** Brute-force cosine similarity (~5-15ms for <10K chunks)
+- **Threshold:** Minimum cosine similarity ≥ 0.3
+- **Persistence:** Document tables survive dataset switches
+
+### 9.2 Keyword Fallback
+
+If no documents are uploaded or vector search returns no matches:
+
+- **Matching:** Word-boundary regex against 10 curated SAP O2C knowledge entries
+- **Fallback:** If no keyword match, RAG queries return "no context found"
+- **Hybrid mode:** For HYBRID queries, both RAG context and SQL results are combined
+
+### 9.3 Document Pipeline
+
+```
+Upload (PDF/DOCX/TXT/MD) → Extract text → Chunk (500 chars, 50 overlap) → Embed → Store in SQLite
+```
+
+| Component | Implementation |
+|-----------|---------------|
+| PDF extraction | pdf-parse |
+| DOCX extraction | officeparser |
+| Chunking | Recursive character splitter (separators: `\n\n` → `\n` → `. ` → ` `) |
+| Embedding | Xenova/all-MiniLM-L6-v2 (384-dim, ONNX/WASM, lazy-loaded on first call) |
+| Vector store | SQLite with cosine similarity in JS |
 
 ---
 
@@ -354,7 +387,12 @@ src/
 │   ├── graphExtractor.js        ← SQL results → Cytoscape graph (O2C + generic)
 │   └── sqlExecutor.js           ← Execute SQL with retry + JOIN relaxation
 ├── rag/
-│   └── knowledgeBase.js         ← Domain knowledge entries + matching
+│   ├── knowledgeBase.js         ← Dual-path retrieval (vector search + keyword fallback)
+│   ├── vectorStore.js           ← SQLite document/chunk tables + cosine similarity
+│   ├── embeddingService.js      ← Local HF embeddings (Xenova/all-MiniLM-L6-v2)
+│   ├── documentExtractor.js     ← PDF/DOCX/TXT/MD text extraction
+│   ├── chunker.js               ← Recursive character text splitter
+│   └── zipExtractor.js          ← ZIP archive extraction for dataset uploads
 ├── config/
 │   └── datasetConfig.js         ← Active dataset config management
 ├── onboarding/
@@ -366,5 +404,6 @@ src/
 │   ├── schema.sql               ← CREATE TABLE + CREATE INDEX statements
 │   └── loader.js                ← JSONL → SQLite ingestion with transforms
 └── routes/
-    └── queryRoutes.js           ← Express routes (query, upload, providers)
+    ├── queryRoutes.js           ← Express routes (query, upload, providers)
+    └── documentRoutes.js        ← Document upload/list/delete API
 ```
