@@ -42,7 +42,14 @@ function App() {
   const [showSql, setShowSql] = useState(false);
   const [datasetInfo, setDatasetInfo] = useState(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState(null); // null | 'loading' | { success, message }
+  const [uploadStatus, setUploadStatus] = useState(null);
+  const [uploadMode, setUploadMode] = useState('config');
+  const [onboardingStep, setOnboardingStep] = useState(0);
+  const [onboardingSession, setOnboardingSession] = useState(null);
+  const [editedTables, setEditedTables] = useState(null);
+  const [editedRelationships, setEditedRelationships] = useState(null);
+  const [datasetName, setDatasetName] = useState('');
+  const [providerHealth, setProviderHealth] = useState(null);
 
   const cyRef = useRef(null);
   const cyContainerRef = useRef(null);
@@ -50,6 +57,7 @@ function App() {
   const isDraggingTooltip = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
   const fileInputRef = useRef(null);
+  const rawFileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
 
   const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -64,10 +72,28 @@ function App() {
       .catch(() => setDatasetError(true));
   };
 
-  // Fetch active dataset metadata on mount
+  const fetchProviderHealth = () => {
+    fetch(`${API_BASE}/api/providers`)
+      .then(r => r.json())
+      .then(data => setProviderHealth(data))
+      .catch(() => {});
+  };
+
+  // Fetch active dataset metadata + provider health on mount
   useEffect(() => {
     fetchDatasetInfo();
+    fetchProviderHealth();
+    // Refresh provider health every 30s
+    const interval = setInterval(fetchProviderHealth, 30000);
+    return () => clearInterval(interval);
   }, []);
+
+  // Refresh provider health after each query
+  useEffect(() => {
+    if (!isLoading && resultInfo) {
+      fetchProviderHealth();
+    }
+  }, [isLoading]);
 
   const handleDatasetUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -106,6 +132,89 @@ function App() {
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handleRawUpload = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setUploadStatus('loading');
+    try {
+      const formData = new FormData();
+      for (const file of files) {
+        formData.append('files', file);
+      }
+
+      const res = await axios.post(`${API_BASE}/api/dataset/upload/raw`, formData, {
+        timeout: 120000,
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      if (res.data.success) {
+        setOnboardingSession(res.data.sessionId);
+        setEditedTables(res.data.schema.tables);
+        setEditedRelationships(res.data.relationships.map(r => ({ ...r, accepted: r.confidence >= 0.5 })));
+        setDatasetName('');
+        setOnboardingStep(1);
+        setUploadStatus(null);
+      } else {
+        setUploadStatus({ success: false, message: res.data.error?.message || 'Upload failed.' });
+      }
+    } catch (err) {
+      const msg = err.response?.data?.error?.message || err.message || 'Upload failed.';
+      setUploadStatus({ success: false, message: msg });
+    } finally {
+      if (rawFileInputRef.current) rawFileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmOnboarding = async () => {
+    if (!datasetName.trim()) {
+      setUploadStatus({ success: false, message: 'Please enter a dataset name.' });
+      return;
+    }
+
+    setUploadStatus('loading');
+    try {
+      const acceptedRels = (editedRelationships || [])
+        .filter(r => r.accepted)
+        .map(({ accepted, ...rest }) => rest);
+
+      const res = await axios.post(`${API_BASE}/api/dataset/upload/confirm`, {
+        sessionId: onboardingSession,
+        name: datasetName.trim(),
+        tables: editedTables,
+        relationships: acceptedRels
+      }, { timeout: 120000 });
+
+      if (res.data.success) {
+        setUploadStatus({
+          success: true,
+          message: `Dataset "${res.data.dataset}" loaded — ${res.data.tablesCreated} tables, ${res.data.rowsLoaded} rows.`
+        });
+        fetchDatasetInfo();
+        setChatHistory([]);
+        setResultInfo(null);
+        setSelectedNode(null);
+        if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null; }
+        setOnboardingStep(0);
+        setOnboardingSession(null);
+      } else {
+        setUploadStatus({ success: false, message: res.data.error?.message || 'Confirmation failed.' });
+      }
+    } catch (err) {
+      const msg = err.response?.data?.error?.message || err.message || 'Confirmation failed.';
+      setUploadStatus({ success: false, message: msg });
+    }
+  };
+
+  const resetOnboarding = () => {
+    setOnboardingStep(0);
+    setOnboardingSession(null);
+    setEditedTables(null);
+    setEditedRelationships(null);
+    setDatasetName('');
+    setUploadStatus(null);
   };
 
   useEffect(() => {
@@ -152,6 +261,37 @@ function App() {
     };
   };
 
+  // Compute provider health summary
+  const getProviderSummary = () => {
+    if (!providerHealth) return { active: 0, total: 0, healthy: 0 };
+    const entries = Object.values(providerHealth);
+    const active = entries.filter(p => p.active);
+    const healthy = active.filter(p => !p.cooldown && p.consecutiveFailures === 0);
+    return { active: active.length, total: entries.length, healthy: healthy.length };
+  };
+
+  const providerSummary = getProviderSummary();
+
+  // Dynamic welcome examples based on dataset
+  const getWelcomeExamples = () => {
+    if (!datasetInfo) return [];
+    if (datasetInfo.name === 'sap_o2c') {
+      return [
+        'Trace full flow for billing document 90504204',
+        'Top 5 customers by billing amount',
+        'Show all cancelled billing documents',
+        'Count all delivery documents',
+      ];
+    }
+    // Generic examples from table names
+    const tables = datasetInfo.tables || [];
+    const examples = [];
+    if (tables.length > 0) examples.push(`Show all ${tables[0].displayName || tables[0].name}`);
+    if (tables.length > 1) examples.push(`Count all ${tables[1].displayName || tables[1].name}`);
+    if (tables.length > 0) examples.push(`List ${tables[0].displayName || tables[0].name} with filters`);
+    return examples;
+  };
+
   const initCytoscape = (graph, highlightNodes) => {
     if (cyRef.current) {
       cyRef.current.destroy();
@@ -171,7 +311,6 @@ function App() {
       maxZoom: 2.5,
       minZoom: 0.3,
       style: [
-        // Default node: small dot, no label
         {
           selector: 'node',
           style: {
@@ -186,7 +325,6 @@ function App() {
             'overlay-padding': '3px'
           }
         },
-        // Selected / tapped node: show label
         {
           selector: 'node:selected',
           style: {
@@ -204,7 +342,6 @@ function App() {
             'text-max-width': '80px'
           }
         },
-        // Edges: very thin, light blue
         {
           selector: 'edge',
           style: {
@@ -224,36 +361,13 @@ function App() {
             'opacity': 0.5
           }
         },
-        // Edge labels hidden class
-        {
-          selector: 'edge.hide-label',
-          style: { 'label': '' }
-        },
-        // Node type colors — red/pink outlined dots for documents, blue for others
-        {
-          selector: 'node[type="SalesOrder"]',
-          style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' }
-        },
-        {
-          selector: 'node[type="Delivery"]',
-          style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' }
-        },
-        {
-          selector: 'node[type="BillingDocument"]',
-          style: { 'background-color': '#e87c8a', 'border-color': '#e87c8a' }
-        },
-        {
-          selector: 'node[type="JournalEntry"]',
-          style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' }
-        },
-        {
-          selector: 'node[type="Payment"]',
-          style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' }
-        },
-        {
-          selector: 'node[type="Customer"]',
-          style: { 'background-color': '#e87c8a', 'border-color': '#e87c8a' }
-        },
+        { selector: 'edge.hide-label', style: { 'label': '' } },
+        { selector: 'node[type="SalesOrder"]', style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' } },
+        { selector: 'node[type="Delivery"]', style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' } },
+        { selector: 'node[type="BillingDocument"]', style: { 'background-color': '#e87c8a', 'border-color': '#e87c8a' } },
+        { selector: 'node[type="JournalEntry"]', style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' } },
+        { selector: 'node[type="Payment"]', style: { 'background-color': '#6b9cf7', 'border-color': '#6b9cf7' } },
+        { selector: 'node[type="Customer"]', style: { 'background-color': '#e87c8a', 'border-color': '#e87c8a' } },
         {
           selector: 'node[type="Aggregation"], node[type="Company"], node[type="Product"], node[type="Plant"], node[type="Document"]',
           style: { 'background-color': '#e87c8a', 'border-color': '#e87c8a' }
@@ -271,13 +385,10 @@ function App() {
       }
     });
 
-    // Tap node: select it (shows label), open tooltip
     cyRef.current.on('tap', 'node', (evt) => {
-      // Deselect all, then select tapped
       cyRef.current.nodes().deselect();
       evt.target.select();
 
-      // Clamp tooltip position within graph panel bounds
       const container = cyContainerRef.current;
       const pos = evt.renderedPosition;
       const tooltipW = 320;
@@ -287,21 +398,14 @@ function App() {
 
       let x = pos.x + 20;
       let y = pos.y + 20;
-
-      // If tooltip goes off right edge, flip to left side of node
       if (x + tooltipW > cw) x = pos.x - tooltipW - 10;
-      // If tooltip goes off bottom, move it up
       if (y + tooltipH > ch) y = Math.max(10, ch - tooltipH - 10);
-      // If still off top, clamp
       if (y < 10) y = 10;
 
-      setSelectedNode({
-        data: evt.target.data()
-      });
+      setSelectedNode({ data: evt.target.data() });
       setTooltipPos({ x, y });
     });
 
-    // Tap background: deselect and close tooltip
     cyRef.current.on('tap', (evt) => {
       if (evt.target === cyRef.current) {
         cyRef.current.nodes().deselect();
@@ -309,12 +413,10 @@ function App() {
       }
     });
 
-    // Apply current label visibility state
     if (!showLabels && cyRef.current) {
       cyRef.current.edges().addClass('hide-label');
     }
 
-    // Highlight specific queried nodes
     if (highlightNodes && highlightNodes.length > 0) {
       cyRef.current.nodes().forEach(node => {
         if (highlightNodes.includes(node.id())) {
@@ -346,7 +448,6 @@ function App() {
       cyRef.current = null;
     }
 
-    // Cancel any in-flight request before starting a new one
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -354,15 +455,14 @@ function App() {
     abortControllerRef.current = controller;
 
     try {
-      const response = await axios.post(`${API_BASE}/api/query`, { query: currentQuery, includeSql: showSql }, { timeout: 30000, signal: controller.signal });
-      const { success, requestId, dataset, queryType, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, queryPlan, truncated, message } = response.data;
+      const response = await axios.post(`${API_BASE}/api/query`, { query: currentQuery, includeSql: showSql }, { timeout: 120000, signal: controller.signal });
+      const { success, requestId, dataset, queryType, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, queryPlan, complexity, truncated, message } = response.data;
 
       if (success) {
         const info = {
           requestId,
           dataset: dataset || null,
           queryType: queryType || null,
-          query: reqQuery,
           rowCount,
           executionTimeMs: Number(executionTimeMs).toFixed(2),
           hasNodes: graph && graph.nodes && graph.nodes.length > 0,
@@ -376,18 +476,15 @@ function App() {
           confidenceLabel: confidenceLabel || null,
           confidenceReasons: confidenceReasons || [],
           queryPlan: queryPlan || null,
+          complexity: complexity || null,
           truncated: truncated || false,
           message: message || null
         };
         setResultInfo(info);
-
-        // Add to chat history
         setChatHistory(prev => [...prev, { type: 'user', text: currentQuery }, { type: 'agent', info }]);
-
         initCytoscape(graph, hl || []);
       }
     } catch (err) {
-      // Silently ignore cancelled requests (user fired a new query)
       if (axios.isCancel(err) || err.name === 'CanceledError') return;
       console.error(err);
       let errMsg = 'An error occurred connecting to the API.';
@@ -439,25 +536,69 @@ function App() {
     ? datasetInfo.name.replace(/_/g, ' ').split(' ').map(w => w[0]?.toUpperCase()).join('')
     : datasetError ? '!' : '...';
 
+  // Badge helpers
+  const queryTypeBadgeClass = (type) => {
+    const t = (type || '').toLowerCase();
+    if (t === 'sql') return 'badge-sql';
+    if (t === 'rag') return 'badge-rag';
+    if (t === 'hybrid') return 'badge-hybrid';
+    return 'badge-fallback';
+  };
+
+  const complexityBadgeClass = (level) => {
+    const l = (level || '').toLowerCase();
+    if (l === 'simple') return 'badge-simple';
+    if (l === 'moderate') return 'badge-moderate';
+    if (l === 'complex') return 'badge-complex';
+    return '';
+  };
+
+  const planBadgeClass = (plan) => {
+    const p = (plan || '').toLowerCase();
+    if (p === 'rule_based') return 'badge-rule';
+    if (p === 'llm') return 'badge-llm';
+    if (p === 'fallback' || p === 'fallback_sql') return 'badge-fallback-plan';
+    return 'badge-fallback-plan';
+  };
+
+  // Provider health dot color
+  const providerDotColor = () => {
+    if (!providerHealth) return '#c0c0d0'; // unknown
+    if (providerSummary.healthy === 0) return '#ef4444'; // all down
+    if (providerSummary.healthy < providerSummary.active) return '#f59e0b'; // degraded
+    return '#34d399'; // healthy
+  };
+
   return (
     <div className="app-container">
       {/* TOP NAV */}
       <div className="top-nav">
-        <div className="nav-icon">&#9649;</div>
+        <div className="nav-logo">O2C</div>
         <div className="nav-breadcrumb">
-          Mapping <span className="nav-separator">/</span> <span className="nav-active">{dsName}</span>
+          Insight Engine <span className="nav-separator">/</span> <span className="nav-active">{dsName}</span>
         </div>
         {datasetInfo && (
           <div className="nav-dataset-badge">
             {datasetInfo.tableCount} tables
           </div>
         )}
+
+        {/* Provider health indicator */}
+        {providerHealth && (
+          <div className="nav-provider-status" title={`${providerSummary.healthy}/${providerSummary.active} providers healthy`}>
+            <span className="provider-dot" style={{ background: providerDotColor() }}></span>
+            <span className="provider-label">
+              {providerSummary.healthy}/{providerSummary.active} AI
+            </span>
+          </div>
+        )}
+
         {datasetError && (
           <button className="nav-dataset-badge" style={{ cursor: 'pointer', color: '#b91c1c' }} onClick={fetchDatasetInfo}>
             Retry Connection
           </button>
         )}
-        <button className="nav-upload-btn" onClick={() => { setUploadStatus(null); setShowUploadModal(true); }}>
+        <button className="nav-upload-btn" onClick={() => { resetOnboarding(); setShowUploadModal(true); }}>
           Switch Dataset
         </button>
       </div>
@@ -465,30 +606,205 @@ function App() {
       {/* Dataset Upload Modal */}
       {showUploadModal && (
         <div className="modal-overlay" onClick={() => setShowUploadModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
+          <div className={`modal-content ${uploadMode === 'raw' && onboardingStep > 0 ? 'modal-wide' : ''}`} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Switch Dataset</h3>
               <button className="modal-close" onClick={() => setShowUploadModal(false)}>&times;</button>
             </div>
             <div className="modal-body">
-              <p className="modal-description">
-                Upload a JSON config file to switch the active dataset. The config must include
-                <strong> name</strong>, <strong>tables</strong> (with columns), <strong>relationships</strong>,
-                and <strong>domainKeywords</strong>.
-              </p>
-              <label className="file-upload-label">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".json"
-                  onChange={handleDatasetUpload}
-                  disabled={uploadStatus === 'loading'}
-                  className="file-input-hidden"
-                />
-                <span className="file-upload-btn">
-                  {uploadStatus === 'loading' ? 'Uploading...' : 'Choose JSON Config File'}
-                </span>
-              </label>
+              {/* Mode Toggle */}
+              <div className="upload-mode-toggle">
+                <button className={`mode-btn ${uploadMode === 'config' ? 'active' : ''}`} onClick={() => { setUploadMode('config'); resetOnboarding(); }}>
+                  Upload Config
+                </button>
+                <button className={`mode-btn ${uploadMode === 'raw' ? 'active' : ''}`} onClick={() => { setUploadMode('raw'); resetOnboarding(); }}>
+                  Upload Raw Data
+                </button>
+              </div>
+
+              {/* Config Mode */}
+              {uploadMode === 'config' && (
+                <>
+                  <p className="modal-description">
+                    Upload a JSON config file to switch the active dataset. The config must include
+                    <strong> name</strong>, <strong>tables</strong> (with columns), <strong>relationships</strong>,
+                    and <strong>domainKeywords</strong>.
+                  </p>
+                  <label className="file-upload-label">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".json"
+                      onChange={handleDatasetUpload}
+                      disabled={uploadStatus === 'loading'}
+                      className="file-input-hidden"
+                    />
+                    <span className="file-upload-btn">
+                      {uploadStatus === 'loading' ? 'Uploading...' : 'Choose JSON Config File'}
+                    </span>
+                  </label>
+                </>
+              )}
+
+              {/* Raw Data Mode */}
+              {uploadMode === 'raw' && onboardingStep === 0 && (
+                <>
+                  <p className="modal-description">
+                    Upload your data files (JSONL or CSV). The system will automatically detect the schema
+                    and suggest relationships between tables.
+                  </p>
+                  <label className="file-upload-label">
+                    <input
+                      ref={rawFileInputRef}
+                      type="file"
+                      multiple
+                      accept=".jsonl,.csv,.json"
+                      onChange={handleRawUpload}
+                      disabled={uploadStatus === 'loading'}
+                      className="file-input-hidden"
+                    />
+                    <span className="file-upload-btn">
+                      {uploadStatus === 'loading' ? 'Analyzing files...' : 'Choose Data Files'}
+                    </span>
+                  </label>
+                </>
+              )}
+
+              {/* Step 1: Schema Review */}
+              {uploadMode === 'raw' && onboardingStep === 1 && editedTables && (
+                <div className="onboarding-step">
+                  <div className="step-indicator">
+                    <span className="step-dot active">1</span>
+                    <span className="step-line"></span>
+                    <span className="step-dot">2</span>
+                  </div>
+                  <h4>Review Detected Schema</h4>
+                  <p className="modal-description">Edit table names, remove unwanted columns, or adjust primary keys.</p>
+                  <div className="schema-tables-list">
+                    {editedTables.map((table, ti) => (
+                      <div key={ti} className="schema-table-card">
+                        <div className="table-card-header">
+                          <input
+                            className="table-name-input"
+                            value={table.displayName || table.name}
+                            onChange={(e) => {
+                              const updated = [...editedTables];
+                              updated[ti] = { ...updated[ti], displayName: e.target.value };
+                              setEditedTables(updated);
+                            }}
+                          />
+                          <span className="table-record-count">{table.recordCount} rows</span>
+                        </div>
+                        <div className="table-pk">
+                          PK: {table.primaryKey?.length > 0 ? (
+                            <select
+                              value={table.primaryKey[0]}
+                              onChange={(e) => {
+                                const updated = [...editedTables];
+                                updated[ti] = { ...updated[ti], primaryKey: [e.target.value] };
+                                setEditedTables(updated);
+                              }}
+                            >
+                              {table.columns.map(col => (
+                                <option key={col} value={col}>{col}</option>
+                              ))}
+                            </select>
+                          ) : <span className="pk-none">None detected</span>}
+                        </div>
+                        <div className="table-columns">
+                          {table.columns.map((col, ci) => (
+                            <span key={ci} className="chip">
+                              {col}
+                              <button className="chip-remove" onClick={() => {
+                                const updated = [...editedTables];
+                                const newCols = updated[ti].columns.filter((_, i) => i !== ci);
+                                updated[ti] = { ...updated[ti], columns: newCols };
+                                setEditedTables(updated);
+                              }}>&times;</button>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="onboarding-actions">
+                    <button className="btn-secondary" onClick={resetOnboarding}>Back</button>
+                    <button className="btn-primary" onClick={() => setOnboardingStep(2)}>Next: Relationships</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: Relationship Review */}
+              {uploadMode === 'raw' && onboardingStep === 2 && (
+                <div className="onboarding-step">
+                  <div className="step-indicator">
+                    <span className="step-dot completed">1</span>
+                    <span className="step-line"></span>
+                    <span className="step-dot active">2</span>
+                  </div>
+                  <h4>Review Suggested Relationships</h4>
+                  <p className="modal-description">Accept or reject the detected relationships.</p>
+
+                  {editedRelationships && editedRelationships.length > 0 ? (
+                    <div className="relationships-list">
+                      {editedRelationships.map((rel, ri) => (
+                        <div key={ri} className={`relationship-card ${rel.accepted ? 'accepted' : 'rejected'}`}>
+                          <label className="rel-checkbox">
+                            <input
+                              type="checkbox"
+                              checked={rel.accepted}
+                              onChange={() => {
+                                const updated = [...editedRelationships];
+                                updated[ri] = { ...updated[ri], accepted: !updated[ri].accepted };
+                                setEditedRelationships(updated);
+                              }}
+                            />
+                          </label>
+                          <div className="rel-info">
+                            <div className="rel-path">{rel.from} &rarr; {rel.to}</div>
+                            <div className="rel-meta">
+                              <span className="rel-label-tag">{rel.label}</span>
+                              <span className="rel-join">{rel.joinType}</span>
+                              <span className={`rel-level rel-level-${rel.level || (rel.confidence > 0.8 ? 'strong' : 'medium')}`}>
+                                {rel.level || (rel.confidence > 0.8 ? 'strong' : 'medium')}
+                              </span>
+                            </div>
+                            <div className="rel-reason">{rel.reason}</div>
+                          </div>
+                          <div className="confidence-bar-wrap">
+                            <div className={`confidence-bar confidence-${rel.level || (rel.confidence > 0.8 ? 'strong' : 'medium')}`} style={{ width: `${Math.round(rel.confidence * 100)}%` }}></div>
+                            <span className="confidence-pct">{Math.round(rel.confidence * 100)}%</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="no-relationships">
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>No relationships detected</div>
+                      <div>Your tables will be loaded independently. You can still query each table individually.</div>
+                    </div>
+                  )}
+
+                  <div className="dataset-name-input">
+                    <label>Dataset Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. my_sales_data"
+                      value={datasetName}
+                      onChange={(e) => setDatasetName(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="onboarding-actions">
+                    <button className="btn-secondary" onClick={() => setOnboardingStep(1)}>Back</button>
+                    <button className="btn-primary" onClick={handleConfirmOnboarding} disabled={uploadStatus === 'loading'}>
+                      {uploadStatus === 'loading' ? 'Loading...' : 'Confirm & Load'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Status Messages */}
               {uploadStatus && uploadStatus !== 'loading' && (
                 <div className={`upload-status ${uploadStatus.success ? 'upload-success' : 'upload-error'}`}>
                   {uploadStatus.message}
@@ -497,7 +813,7 @@ function App() {
               {uploadStatus === 'loading' && (
                 <div className="upload-status upload-loading">
                   <div className="dot-pulse"><span></span><span></span><span></span></div>
-                  Initializing dataset...
+                  {onboardingStep === 0 ? 'Analyzing files...' : 'Initializing dataset...'}
                 </div>
               )}
             </div>
@@ -510,13 +826,12 @@ function App() {
         <div className="graph-panel">
           <div ref={cyContainerRef} className="cy-container" />
 
-          {/* Floating overlay buttons */}
           <div className="graph-overlay-buttons">
             <button className="overlay-btn" onClick={handleFitGraph} disabled={!cyRef.current}>
               <span className="btn-icon">&#8596;</span> Fit View
             </button>
             <button className="overlay-btn" onClick={handleToggleLabels}>
-              <span className="btn-icon">&#9783;</span> {showLabels ? 'Hide Edge Labels' : 'Show Edge Labels'}
+              <span className="btn-icon">&#9783;</span> {showLabels ? 'Hide Labels' : 'Show Labels'}
             </button>
           </div>
 
@@ -526,18 +841,21 @@ function App() {
               <div className="empty-icon">&#9672;</div>
               {!resultInfo && <div>Ask a question to visualize the graph</div>}
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'INVALID_ID' && (
-                <div style={{ color: '#b91c1c' }}>Document not found in the dataset</div>
+                <div className="empty-error">Document not found in the dataset</div>
               )}
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'NO_FLOW' && (
-                <div style={{ color: '#92400e' }}>No connected flow found</div>
+                <div className="empty-warn">No connected flow found</div>
               )}
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'AGGREGATION' && (
-                <div style={{ color: '#4a6cf7' }}>Aggregation results shown in chat</div>
+                <div className="empty-info">Aggregation results shown in chat</div>
               )}
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'RAG_RESPONSE' && (
-                <div style={{ color: '#4a6cf7' }}>Knowledge base answer shown in chat</div>
+                <div className="empty-info">Knowledge base answer shown in chat</div>
               )}
-              {resultInfo && !resultInfo.hasNodes && !resultInfo.reason && (
+              {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'LLM_UNAVAILABLE' && (
+                <div className="empty-warn">AI providers temporarily unavailable</div>
+              )}
+              {resultInfo && !resultInfo.hasNodes && !['INVALID_ID','NO_FLOW','AGGREGATION','RAG_RESPONSE','LLM_UNAVAILABLE'].includes(resultInfo.reason) && (
                 <div>No graph data available</div>
               )}
             </div>
@@ -549,28 +867,23 @@ function App() {
             const MAX_VISIBLE = 15;
             const visible = entries.slice(0, MAX_VISIBLE);
             const hiddenCount = entries.length - MAX_VISIBLE;
-            // Count edges connected to this node
             const connections = cyRef.current ? cyRef.current.getElementById(selectedNode.data.id).connectedEdges().length : 0;
 
             return (
               <div
                 className="node-tooltip"
-                style={{
-                  left: tooltipPos.x + 'px',
-                  top: tooltipPos.y + 'px'
-                }}
+                style={{ left: tooltipPos.x + 'px', top: tooltipPos.y + 'px' }}
                 onMouseDown={handleTooltipDragStart}
               >
                 <h4>{selectedNode.data.type || 'Entity'}</h4>
                 <div className="tooltip-body">
-                  <div className="tooltip-line"><span className="tooltip-key">Entity:</span> {selectedNode.data.type}</div>
                   {visible.map(([key, val]) => (
                     <div key={key} className="tooltip-line">
                       <span className="tooltip-key">{key}:</span> {val?.toString() || ''}
                     </div>
                   ))}
                   {hiddenCount > 0 && (
-                    <div className="tooltip-hidden">Additional fields hidden for readability</div>
+                    <div className="tooltip-hidden">+{hiddenCount} more fields</div>
                   )}
                   <div className="tooltip-connections">Connections: {connections}</div>
                 </div>
@@ -596,11 +909,13 @@ function App() {
 
           <div className="chat-messages">
             <div className="chat-welcome">
-              Hi! I can help you analyze the <strong>{dsName}</strong> process. Try asking things like:
-              <ul style={{ marginTop: 8, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4, fontSize: '12.5px', color: '#6b6b80' }}>
-                <li>Trace full flow for billing document 90504204</li>
-                <li>Top 5 customers by billing amount</li>
-                <li>Show all cancelled billing documents</li>
+              Hi! I can help you analyze the <strong>{dsName}</strong> dataset. Try asking:
+              <ul className="welcome-examples">
+                {getWelcomeExamples().map((ex, i) => (
+                  <li key={i}>
+                    <button className="welcome-example-btn" onClick={() => setQuery(ex)}>{ex}</button>
+                  </li>
+                ))}
               </ul>
             </div>
 
@@ -620,7 +935,8 @@ function App() {
               if (msg.type === 'agent' && msg.info) {
                 const r = msg.info;
                 return (
-                  <div key={i}>
+                  <div key={i} className="chat-response">
+                    {/* NL Answer */}
                     {r.nlAnswer && (
                       <div className="chat-agent-msg">
                         <div className="chat-agent-header">
@@ -630,18 +946,37 @@ function App() {
                         <div className="chat-agent-bubble">{r.nlAnswer}</div>
                       </div>
                     )}
+
+                    {/* Summary fallback (no NL answer) */}
                     {!r.nlAnswer && r.summary && (
-                      <div className={r.reason === 'INVALID_ID' ? 'chat-error' : r.reason === 'NO_FLOW' ? 'chat-info' : 'chat-welcome'}>
-                        {r.summary}
+                      <div className={
+                        r.reason === 'INVALID_ID' ? 'chat-error' :
+                        r.reason === 'NO_FLOW' || r.reason === 'LLM_UNAVAILABLE' ? 'chat-info' :
+                        'chat-agent-msg'
+                      }>
+                        {r.reason === 'INVALID_ID' || r.reason === 'NO_FLOW' || r.reason === 'LLM_UNAVAILABLE' ? (
+                          r.summary
+                        ) : (
+                          <>
+                            <div className="chat-agent-header">
+                              <div className="agent-avatar-sm">{dsShort}</div>
+                              <span className="agent-name-sm">Graph Agent</span>
+                            </div>
+                            <div className="chat-agent-bubble">{r.summary}</div>
+                          </>
+                        )}
                       </div>
                     )}
-                    {/* Zero-data message — shown when no nlAnswer and backend provides a reason message */}
-                    {r.message && !r.nlAnswer && (
+
+                    {/* Zero-data message */}
+                    {r.message && !r.nlAnswer && r.reason !== 'LLM_UNAVAILABLE' && (
                       <div className="chat-info">{r.message}</div>
                     )}
+
+                    {/* Suggestion chips — for INVALID_ID */}
                     {r.reason === 'INVALID_ID' && r.suggestions && r.suggestions.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: '12px', color: '#6b6b80', marginBottom: 6 }}>Try a valid document:</div>
+                      <div className="suggestion-section">
+                        <div className="suggestion-label">Try a valid document:</div>
                         <div className="suggestion-chips">
                           {r.suggestions.map(s => (
                             <button key={s} className="suggestion-chip" onClick={() => setQuery(`Trace full flow for billing document ${s}`)}>
@@ -651,28 +986,56 @@ function App() {
                         </div>
                       </div>
                     )}
-                    {/* Confidence score */}
-                    {r.confidence != null && (
-                      <div className="confidence-text">
-                        <div>Confidence: {Math.round(r.confidence * 100)}%{r.confidenceLabel && ` (${r.confidenceLabel})`}</div>
-                        {r.confidenceReasons && r.confidenceReasons.length > 0 && (
-                          <div className="confidence-reasons">
-                            {r.confidenceReasons.map((reason, i) => (
-                              <span key={i}>&#8226; {reason}{i < r.confidenceReasons.length - 1 ? ' ' : ''}</span>
-                            ))}
-                          </div>
+
+                    {/* Suggestion chips — for LLM_UNAVAILABLE */}
+                    {r.reason === 'LLM_UNAVAILABLE' && r.suggestions && r.suggestions.length > 0 && (
+                      <div className="suggestion-section">
+                        <div className="suggestion-label">Try one of these queries:</div>
+                        <div className="suggestion-chips">
+                          {r.suggestions.map((s, si) => (
+                            <button key={si} className="suggestion-chip" onClick={() => setQuery(s)}>
+                              {s}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Metadata badges row */}
+                    {(r.queryType || r.complexity || r.queryPlan) && (
+                      <div className="response-badges">
+                        {r.queryType && (
+                          <span className={`query-type-badge ${queryTypeBadgeClass(r.queryType)}`}>{r.queryType}</span>
+                        )}
+                        {r.complexity && (
+                          <span className={`query-type-badge ${complexityBadgeClass(r.complexity)}`}>{r.complexity}</span>
+                        )}
+                        {r.queryPlan && (
+                          <span className={`query-type-badge ${planBadgeClass(r.queryPlan)}`}>{r.queryPlan.replace('_', ' ')}</span>
+                        )}
+                        {r.confidence != null && (
+                          <span className={`confidence-badge confidence-badge-${r.confidenceLabel?.toLowerCase() || 'medium'}`}>
+                            {Math.round(r.confidence * 100)}% {r.confidenceLabel || ''}
+                          </span>
                         )}
                       </div>
                     )}
-                    {/* Query execution plan */}
-                    {r.queryPlan && (
-                      <div className="confidence-text">Plan: {r.queryPlan}</div>
+
+                    {/* Confidence reasons (collapsible feel — subtle) */}
+                    {r.confidenceReasons && r.confidenceReasons.length > 0 && (
+                      <div className="confidence-reasons">
+                        {r.confidenceReasons.map((reason, ci) => (
+                          <span key={ci}>&#8226; {reason}{ci < r.confidenceReasons.length - 1 ? ' ' : ''}</span>
+                        ))}
+                      </div>
                     )}
+
                     {/* Truncation warning */}
                     {r.truncated && (
-                      <div className="chat-info">Showing first 1000 results (truncated)</div>
+                      <div className="chat-info">Showing first 100 results (truncated)</div>
                     )}
-                    {/* Explanation — how the query was answered */}
+
+                    {/* Explanation card */}
                     {r.explanation && (
                       <div className="result-card">
                         <div className="result-card-title">How this was answered</div>
@@ -697,46 +1060,33 @@ function App() {
                         </div>
                       </div>
                     )}
-                    {/* Generated SQL — only when includeSql was true */}
+
+                    {/* Generated SQL */}
                     {(r.sql || r.generatedSql) && (
                       <div className="result-card">
-                        <div className="result-card-title">Generated SQL (Debug View)</div>
+                        <div className="result-card-title">Generated SQL</div>
                         <pre className="sql-block">{r.sql || r.generatedSql}</pre>
                       </div>
                     )}
+
+                    {/* Execution details — only for data-returning queries */}
                     {r.rowCount > 0 && (
                       <div className="result-card">
                         <div className="result-card-title">Execution Details</div>
+                        <div className="result-row">
+                          <span className="result-label">Rows</span>
+                          <span className="result-value">{r.rowCount}</span>
+                        </div>
+                        <div className="result-row">
+                          <span className="result-label">Time</span>
+                          <span className="result-value">{r.executionTimeMs} ms</span>
+                        </div>
                         {r.dataset && (
                           <div className="result-row">
                             <span className="result-label">Dataset</span>
                             <span className="result-value">{r.dataset}</span>
                           </div>
                         )}
-                        {r.queryType && (
-                          <div className="result-row">
-                            <span className="result-label">Query Type</span>
-                            <span className="result-value">
-                              <span className={`query-type-badge badge-${r.queryType.toLowerCase()}`}>{r.queryType}</span>
-                            </span>
-                          </div>
-                        )}
-                        <div className="result-row">
-                          <span className="result-label">Query</span>
-                          <span className="result-value">{r.query}</span>
-                        </div>
-                        <div className="result-row">
-                          <span className="result-label">Request ID</span>
-                          <span className="result-value">{r.requestId}</span>
-                        </div>
-                        <div className="result-row">
-                          <span className="result-label">Rows</span>
-                          <span className="result-value">{r.rowCount}</span>
-                        </div>
-                        <div className="result-row">
-                          <span className="result-label">Execution</span>
-                          <span className="result-value">{r.executionTimeMs} ms</span>
-                        </div>
                       </div>
                     )}
                   </div>
@@ -756,21 +1106,21 @@ function App() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Input Area (Bottom) */}
+          {/* Input Area */}
           <div className="chat-input-area">
             <div className="chat-status">
               <span className={`status-dot ${isLoading ? 'busy' : ''}`}></span>
-              {isLoading ? 'Processing query...' : 'Graph Agent is awaiting instructions'}
+              {isLoading ? 'Processing query...' : 'Ready'}
             </div>
             <div className="sql-toggle">
               <label>
                 <input type="checkbox" checked={showSql} onChange={e => setShowSql(e.target.checked)} />
-                Show SQL (for developers)
+                Show generated SQL
               </label>
             </div>
             <form onSubmit={handleSearch} className="chat-input-wrapper">
               <textarea
-                placeholder="Analyze anything"
+                placeholder="Ask anything about your data..."
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleKeyDown}

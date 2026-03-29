@@ -4,6 +4,7 @@ const { validateSql } = require('./validator');
 const { executeQuery } = require('./sqlExecutor');
 const { extractGraph } = require('./graphExtractor');
 const { classifyQuery } = require('./queryClassifier');
+const { classifyComplexity } = require('./complexityClassifier');
 const { retrieveContext } = require('../rag/knowledgeBase');
 const { getActiveConfig } = require('../config/activeDataset');
 
@@ -108,6 +109,69 @@ function isDomainQuery(query) {
 }
 
 /**
+ * Attempts to handle simple single-table queries without calling the LLM.
+ * Matches patterns like "show all X", "list X", "get X" where X is a known table.
+ * Returns a full response object on match, or null to fall through to LLM.
+ */
+function tryRuleBasedQuery(query, tag, options) {
+    const lower = query.toLowerCase().trim();
+
+    // Only handle simple show/list/get/find patterns without JOINs or complex logic
+    if (!/^(show|list|get|find|fetch|display)\b/i.test(lower)) return null;
+    if (/\b(join|between|where|group|having|relationship|compare|trace|flow)\b/i.test(lower)) return null;
+    if (/\b(top\s+\d|count|total|sum|average|avg|min|max)\b/i.test(lower)) return null;
+
+    const config = getActiveConfig();
+
+    // Try to match a table name in the query
+    let matchedTable = null;
+    for (const t of config.tables) {
+        const displayLower = (t.displayName || '').toLowerCase();
+        const nameLower = t.name.toLowerCase().replace(/_/g, ' ');
+        if (lower.includes(displayLower) || lower.includes(nameLower) || lower.includes(t.name.toLowerCase())) {
+            matchedTable = t;
+            break;
+        }
+    }
+
+    if (!matchedTable) return null;
+
+    const sql = `SELECT * FROM "${matchedTable.name}" LIMIT 100`;
+
+    try {
+        validateSql(sql);
+    } catch {
+        return null; // Fall through to LLM if validation fails
+    }
+
+    console.log(`${tag} [RULE_BASED] Simple listing query → ${sql}`);
+
+    // Execute synchronously-style via the same pipeline
+    const result = require('./sqlExecutor').executeQuerySync(sql);
+    if (!result || !result.success) return null; // Fall through to LLM on DB error
+
+    const response = formatResponse(result, options.includeSql ? sql : undefined);
+    const explanation = buildExplanation(query, sql);
+    const confidence = calculateConfidence({ queryType: 'SQL', fallbackApplied: false, rowCount: result.rowCount, isAggregation: false });
+
+    return {
+        ...response,
+        dataset: config.name,
+        queryType: 'SQL',
+        reason: result.rowCount > 0 ? 'DATA_FOUND' : 'NO_DATA',
+        message: result.rowCount === 0 ? 'No records found.' : null,
+        suggestions: [],
+        nlAnswer: null,
+        explanation,
+        confidence: confidence.score,
+        confidenceLabel: confidence.label,
+        confidenceReasons: [...confidence.reasons, 'Rule-based query (no LLM used)'],
+        queryPlan: 'RULE_BASED',
+        truncated: result.rows.length > 100
+    };
+}
+
+/**
  * Appends a LIMIT to queries that lack them to protect performance
  */
 function enforceLimit(sql) {
@@ -139,6 +203,16 @@ function withTimeout(promise, ms, operationName) {
  * Extracts explicitly referenced entities from the SQL conditionally building highlighting focus paths natively.
  */
 function extractHighlightNodes(sql) {
+    const config = getActiveConfig();
+
+    if (config.name === 'sap_o2c') {
+        return extractHighlightNodesO2C(sql);
+    }
+
+    return extractHighlightNodesGeneric(sql, config);
+}
+
+function extractHighlightNodesO2C(sql) {
     const highlights = [];
     const idRegex = /(?:billingDocument|salesOrder|customer|accountingDocument|deliveryDocument|soldToParty)\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/gi;
     let match;
@@ -152,6 +226,41 @@ function extractHighlightNodes(sql) {
         else if (fieldName.includes('delivery')) highlights.push(`DEL_${id}`);
     }
     return highlights;
+}
+
+function extractHighlightNodesGeneric(sql, config) {
+    const highlights = [];
+    // Build regex from tables with single-column primary keys
+    for (const t of config.tables) {
+        if (!t.primaryKey || t.primaryKey.length !== 1) continue;
+        const pk = t.primaryKey[0];
+        const regex = new RegExp(`${pk}\\s*(?:=|LIKE)\\s*['"]?([\\w]+)['"]?`, 'gi');
+        let match;
+        while ((match = regex.exec(sql)) !== null) {
+            highlights.push(`${t.name}_${pk}_${match[1]}`);
+        }
+    }
+    return highlights;
+}
+
+/**
+ * Builds ID existence checks for generic (non-O2C) datasets.
+ * Creates a check for each table with a single-column primary key.
+ */
+function buildGenericIdChecks(config) {
+    const checks = [];
+    for (const t of config.tables) {
+        if (!t.primaryKey || t.primaryKey.length !== 1) continue;
+        const pk = t.primaryKey[0];
+        const displayName = (t.displayName || t.name.replace(/_/g, ' '));
+        checks.push({
+            regex: new RegExp(`${pk}\\s*(?:=|LIKE)\\s*['"]?([\\w]+)['"]?`, 'i'),
+            table: `"${t.name}"`,
+            column: `"${pk}"`,
+            label: displayName
+        });
+    }
+    return checks;
 }
 
 /**
@@ -177,7 +286,7 @@ function formatResponse(result, rawSql) {
     const highlightNodes = extractHighlightNodes(rawSql);
 
     // Map rows mapping structural identifiers down to array graphs
-    const graphData = extractGraph(finalRows);
+    const graphData = extractGraph(finalRows, getActiveConfig());
 
     return {
         success: true,
@@ -212,14 +321,20 @@ function buildExplanation(query, sql) {
 
     // Also infer entities from tables referenced in the generated SQL
     const sqlLower = (sql || '').toLowerCase();
-    const tableEntityMap = [
-        { table: 'sales_order_headers',                       entity: 'sales order' },
-        { table: 'outbound_delivery',                         entity: 'delivery' },
-        { table: 'billing_document',                          entity: 'billing' },
-        { table: 'journal_entry_items_accounts_receivable',   entity: 'journal entry' },
-        { table: 'payments_accounts_receivable',              entity: 'payment' },
-        { table: 'business_partners',                         entity: 'business partner' },
-    ];
+    const config = getActiveConfig();
+    const tableEntityMap = config.name === 'sap_o2c'
+        ? [
+            { table: 'sales_order_headers',                       entity: 'sales order' },
+            { table: 'outbound_delivery',                         entity: 'delivery' },
+            { table: 'billing_document',                          entity: 'billing' },
+            { table: 'journal_entry_items_accounts_receivable',   entity: 'journal entry' },
+            { table: 'payments_accounts_receivable',              entity: 'payment' },
+            { table: 'business_partners',                         entity: 'business partner' },
+        ]
+        : config.tables.map(t => ({
+            table: t.name,
+            entity: (t.displayName || t.name.replace(/_/g, ' ')).toLowerCase()
+        }));
     const entitiesFromSql = tableEntityMap
         .filter(m => sqlLower.includes(m.table))
         .map(m => m.entity);
@@ -229,13 +344,13 @@ function buildExplanation(query, sql) {
 
     // Determine strategy from intent and SQL shape
     let strategy = 'lookup with filters';
-    if (intent === 'trace') strategy = 'multi-hop join across O2C flow';
+    if (intent === 'trace') strategy = config.name === 'sap_o2c' ? 'multi-hop join across O2C flow' : 'multi-hop join across document flow';
     else if (intent === 'aggregation') strategy = 'aggregation query with GROUP BY';
     else if (intent === 'gap-analysis') strategy = 'gap detection using LEFT JOIN with NULL check';
     else if (sql && /JOIN/i.test(sql)) strategy = 'multi-table join query';
 
     // Build a plain-English explanation of what the system did
-    const entityLabel = entities.length > 0 ? entities.join(', ') : 'O2C data';
+    const entityLabel = entities.length > 0 ? entities.join(', ') : (config.displayName || 'dataset');
     const intentTexts = {
         'trace':        `traced the full document flow across ${entityLabel} records`,
         'aggregation':  `computed aggregated totals for ${entityLabel}`,
@@ -293,6 +408,71 @@ function calculateConfidence({ queryType, fallbackApplied, rowCount, isAggregati
 }
 
 /**
+ * Last-resort SQL generation from keyword-to-table matching.
+ * Called only when ALL LLM providers fail. Returns a simple SELECT or null.
+ */
+function tryFallbackSql(query) {
+    const config = getActiveConfig();
+    const lower = query.toLowerCase();
+
+    // Try to match a table name in the query
+    let matchedTable = null;
+    for (const t of config.tables) {
+        const displayLower = (t.displayName || '').toLowerCase();
+        const nameLower = t.name.toLowerCase().replace(/_/g, ' ');
+        if (lower.includes(displayLower) || lower.includes(nameLower) || lower.includes(t.name.toLowerCase())) {
+            matchedTable = t;
+            break;
+        }
+    }
+
+    if (!matchedTable) return null;
+
+    // Check if query contains a numeric ID we can filter on
+    const idMatch = lower.match(/\b(\d{5,})\b/);
+    if (idMatch && matchedTable.primaryKey && matchedTable.primaryKey.length === 1) {
+        const pk = matchedTable.primaryKey[0];
+        return `SELECT * FROM "${matchedTable.name}" WHERE "${pk}" = '${idMatch[1]}' LIMIT 100;`;
+    }
+
+    // Check for aggregation keywords
+    if (/\b(count|total|how many)\b/.test(lower)) {
+        return `SELECT COUNT(*) AS total FROM "${matchedTable.name}";`;
+    }
+
+    if (/\b(top|highest|largest|biggest|most)\b/.test(lower)) {
+        // Pick a numeric-looking column if available, otherwise just list
+        return `SELECT * FROM "${matchedTable.name}" LIMIT 10;`;
+    }
+
+    return `SELECT * FROM "${matchedTable.name}" LIMIT 100;`;
+}
+
+/**
+ * Returns pre-built example queries for the active dataset.
+ * Shown to users when all LLM providers are unavailable.
+ */
+function buildSuggestedQueries() {
+    const config = getActiveConfig();
+
+    if (config.name === 'sap_o2c') {
+        return [
+            'Show all sales order headers',
+            'List billing document headers',
+            'Show outbound delivery items',
+            'Count all sales orders',
+            'Find journal entries'
+        ];
+    }
+
+    // Generic: build suggestions from table names
+    return config.tables.slice(0, 5).map(t => {
+        const display = t.displayName || t.name.replace(/_/g, ' ');
+        return `Show all ${display}`;
+    });
+}
+
+/**
  * Orchestrates the full Natural Language -> SQL -> Result pipeline
  */
 async function processQuery(naturalLanguageQuery, requestId = 'dev-local', options = {}) {
@@ -310,13 +490,14 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
     const queryType = classifyQuery(naturalLanguageQuery);
     console.log(`${tag} [QUERY_TYPE] ${queryType}`);
 
-    // INVALID path: query has no O2C domain relevance
+    // INVALID path: query has no domain relevance
     if (queryType === 'INVALID') {
-        console.warn(`${tag} [VALIDATION] Domain check failed at classifier — no O2C keywords found.`);
+        const dsName = getActiveConfig().displayName || getActiveConfig().name;
+        console.warn(`${tag} [VALIDATION] Domain check failed at classifier — no domain keywords found.`);
         return {
             success: false,
             dataset: getActiveConfig().name,
-            error: { message: 'This system is designed to answer questions related to the SAP Order-to-Cash dataset only.', type: 'VALIDATION_ERROR' },
+            error: { message: `This system is designed to answer questions related to the ${dsName} dataset only.`, type: 'VALIDATION_ERROR' },
             query: naturalLanguageQuery
         };
     }
@@ -341,7 +522,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             dataset: getActiveConfig().name,
             queryType: 'RAG',
             reason: 'RAG_RESPONSE',
-            nlAnswer: context || 'No specific context found for this topic in the O2C knowledge base.',
+            nlAnswer: context || 'No specific context found for this topic in the knowledge base.',
             rowCount: 0,
             data: [],
             graph: { nodes: [], edges: [] },
@@ -382,15 +563,27 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         };
     }
     
-    // 2. Build Prompt
+    // 2. Rule-based bypass for simple single-table queries (saves LLM cost)
+    const ruleBasedResult = tryRuleBasedQuery(naturalLanguageQuery, tag, options);
+    if (ruleBasedResult) {
+        console.log(`${tag} [RULE_BASED] Handled without LLM.`);
+        setCached(naturalLanguageQuery, options.includeSql, ruleBasedResult);
+        return ruleBasedResult;
+    }
+
+    // 2.5. Classify query complexity for model routing
+    const { level: complexity, reason: complexityReason } = classifyComplexity(naturalLanguageQuery);
+    console.log(`${tag} [COMPLEXITY] ${complexity} — ${complexityReason}`);
+
+    // 3. Build Prompt
     const prompt = buildPrompt(naturalLanguageQuery);
 
-    // 3. Generate SQL from LLM with timeout protection
+    // 4. Generate SQL from LLM with timeout protection (routed by complexity)
     let rawSql = null;
     let llmFailed = false;
 
     try {
-        const generatedSql = await withTimeout(getSqlFromLLM(prompt), 45000, 'LLM Generation');
+        const generatedSql = await withTimeout(getSqlFromLLM(prompt, complexity), 50000, 'LLM Generation');
         rawSql = enforceLimit(generatedSql);
         console.log(`${tag} [SQL_GENERATED]\n${rawSql}`);
         validateSql(rawSql);
@@ -401,13 +594,41 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
     }
 
     if (llmFailed) {
+        // Last resort: try to generate a basic SQL from keyword matching
+        const fallbackSql = tryFallbackSql(naturalLanguageQuery);
+        if (fallbackSql) {
+            console.log(`${tag} [FALLBACK_SQL] Generated: ${fallbackSql}`);
+            try {
+                validateSql(fallbackSql);
+                const fbResult = await withTimeout(executeQuery(fallbackSql), 5000, 'Fallback SQL Execution');
+                if (fbResult.success && fbResult.rowCount > 0) {
+                    console.log(`${tag} [FALLBACK_SQL] Success — ${fbResult.rowCount} rows.`);
+                    const response = formatResponse(fbResult, options.includeSql ? fallbackSql : undefined);
+                    response.dataset = getActiveConfig().name;
+                    response.queryType = 'SQL';
+                    response.reason = fbResult.rowCount > 0 ? 'DATA_FOUND' : 'NO_DATA';
+                    response.explanation = buildExplanation(naturalLanguageQuery, fallbackSql);
+                    response.confidence = 0.5;
+                    response.confidenceLabel = 'Medium';
+                    response.confidenceReasons = ['Fallback SQL (no LLM used)', 'Basic keyword-to-table matching'];
+                    response.queryPlan = 'FALLBACK_SQL';
+                    response.complexity = complexity;
+                    response.nlAnswer = null;
+                    setCached(naturalLanguageQuery, options.includeSql, response);
+                    return response;
+                }
+            } catch (fbErr) {
+                console.error(`${tag} [FALLBACK_SQL] Failed:`, fbErr.message);
+            }
+        }
+
         const fallbackResponse = {
             success: true,
             dataset: getActiveConfig().name,
             queryType: 'FALLBACK',
-            summary: 'Unable to process your query due to an AI service issue. Please try again shortly.',
+            summary: 'All AI providers are temporarily unavailable. Please try again shortly.',
             reason: 'LLM_UNAVAILABLE',
-            message: 'The AI service is temporarily unavailable.',
+            message: 'All AI services are temporarily unavailable.',
             rowCount: 0,
             keyFields: [],
             data: [],
@@ -416,14 +637,16 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             explanation: {
                 intent: 'unknown',
                 entities: [],
-                strategy: 'LLM failed, fallback response',
-                explanationText: 'Unable to process query due to AI service issue.'
+                strategy: 'All LLM providers failed',
+                explanationText: 'Unable to process query — all AI providers exhausted.'
             },
-            confidence: 0.2,
+            confidence: 0.1,
             confidenceLabel: 'Low',
-            confidenceReasons: ['LLM unavailable — both Groq and OpenRouter failed'],
+            confidenceReasons: ['All LLM providers failed'],
             queryPlan: 'FALLBACK',
-            nlAnswer: null
+            complexity,
+            nlAnswer: null,
+            suggestions: buildSuggestedQueries()
         };
         setCached(naturalLanguageQuery, options.includeSql, fallbackResponse);
         return fallbackResponse;
@@ -436,11 +659,14 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         let explicitCustChecked = false;
         let extractedCustId = null;
 
-        const idChecks = [
-            { regex: /billingDocument\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'billing_document_headers', column: 'billingDocument', label: 'Billing document' },
-            { regex: /(?:soh\.|sales_order_headers\.)?\bsalesOrder\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'sales_order_headers', column: 'salesOrder', label: 'Sales order' },
-            { regex: /deliveryDocument\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'outbound_delivery_headers', column: 'deliveryDocument', label: 'Delivery document' }
-        ];
+        const activeConfig = getActiveConfig();
+        const idChecks = activeConfig.name === 'sap_o2c'
+            ? [
+                { regex: /billingDocument\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'billing_document_headers', column: 'billingDocument', label: 'Billing document' },
+                { regex: /(?:soh\.|sales_order_headers\.)?\bsalesOrder\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'sales_order_headers', column: 'salesOrder', label: 'Sales order' },
+                { regex: /deliveryDocument\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'outbound_delivery_headers', column: 'deliveryDocument', label: 'Delivery document' }
+            ]
+            : buildGenericIdChecks(activeConfig);
 
         for (const check of idChecks) {
             const match = rawSql.match(check.regex);
@@ -488,8 +714,10 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             }
         }
 
-        // 4.6. Check if specific customer exists in DB
-        const custMatch = rawSql.match(/(?:soldToParty|\.customer)\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i);
+        // 4.6. Check if specific customer exists in DB (O2C-specific)
+        const custMatch = activeConfig.name === 'sap_o2c'
+            ? rawSql.match(/(?:soldToParty|\.customer)\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i)
+            : null;
 
         if (custMatch && custMatch[1]) {
             extractedCustId = custMatch[1];
@@ -544,9 +772,14 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
         if (dbResult.rowCount === 0) {
             const upSql = rawSql.toUpperCase();
-            const hasFlowTables = upSql.includes('SALES_ORDER') || upSql.includes('OUTBOUND_DELIVERY') || upSql.includes('BILLING_DOCUMENT');
             const hasAggregations = upSql.includes('GROUP BY') || /\b(COUNT|SUM|AVG|MIN|MAX)\s*\(/i.test(rawSql);
             const isGapQuery = /IS\s+NULL/i.test(rawSql);
+
+            // Build relaxation table list from config
+            const relaxationTables = activeConfig.name === 'sap_o2c'
+                ? ['outbound_delivery_items', 'outbound_delivery_headers', 'billing_document_items', 'billing_document_headers', 'sales_order_items', 'payments_accounts_receivable', 'journal_entry_items_accounts_receivable']
+                : activeConfig.tables.map(t => t.name);
+            const hasFlowTables = relaxationTables.some(t => upSql.includes(t.toUpperCase()));
 
             if (!hasFlowTables) {
                 console.log(`${tag} [FALLBACK_USED] Skipped — non-flow query.`);
@@ -556,13 +789,17 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 console.log(`${tag} [FALLBACK_USED] Skipped — gap analysis query (IS NULL).`);
             } else if (rawSql.match(/\bJOIN\b/gi)) {
                 console.log(`${tag} [FALLBACK_USED] Zero rows — triggering LEFT JOIN relaxation...`);
-                
+
                 let relaxedSql = rawSql;
-                // Target explicitly safe mapping pipelines natively
-                relaxedSql = relaxedSql.replace(/\bINNER\s+JOIN\s+(outbound_delivery_items|outbound_delivery_headers|billing_document_items|billing_document_headers|sales_order_items|payments_accounts_receivable|journal_entry_items_accounts_receivable)\b/gi, 'JOIN $1');
-                relaxedSql = relaxedSql.replace(/\bJOIN\s+(outbound_delivery_items|outbound_delivery_headers|billing_document_items|billing_document_headers|sales_order_items|payments_accounts_receivable|journal_entry_items_accounts_receivable)\b/gi, 'LEFT JOIN $1');
-                
-                // Clean up accidental overwrites logically
+                // Build regex from relaxation table list
+                const tablePattern = relaxationTables.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+                const innerJoinRegex = new RegExp(`\\bINNER\\s+JOIN\\s+(${tablePattern})\\b`, 'gi');
+                const joinRegex = new RegExp(`\\bJOIN\\s+(${tablePattern})\\b`, 'gi');
+
+                relaxedSql = relaxedSql.replace(innerJoinRegex, 'JOIN $1');
+                relaxedSql = relaxedSql.replace(joinRegex, 'LEFT JOIN $1');
+
+                // Clean up accidental overwrites
                 relaxedSql = relaxedSql.replace(/\bLEFT\s+LEFT\s+JOIN\b/gi, 'LEFT JOIN');
                 relaxedSql = relaxedSql.replace(/\bRIGHT\s+LEFT\s+JOIN\b/gi, 'RIGHT JOIN');
 
@@ -636,8 +873,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         let nlAnswer = null;
         try {
             nlAnswer = await withTimeout(
-                generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount, ragContext),
-                45000,
+                generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount, ragContext, complexity),
+                50000,
                 'NL Answer Generation'
             );
             console.log(`${tag} [RESULT] NL answer generated.`);
@@ -706,6 +943,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 nlAnswer: nlAnswer,
                 summary: nlAnswer || "This query returns aggregated results. Showing summarized nodes instead of relationships.",
                 reason: 'AGGREGATION',
+                complexity,
                 rowCount: dbResult.rowCount,
                 keyFields: dbResult.rows.length > 0 ? Object.keys(dbResult.rows[0]) : [],
                 executionTimeMs: Number(dbResult.executionTimeMs),
@@ -747,6 +985,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         finalResponse.queryType = queryType; // "SQL" or "HYBRID"
         finalResponse.dataset = getActiveConfig().name;
         finalResponse.queryPlan = fallbackApplied ? 'FALLBACK' : 'LLM';
+        finalResponse.complexity = complexity;
 
         // Strip SQL from response unless caller explicitly requested it
         if (!options.includeSql) {

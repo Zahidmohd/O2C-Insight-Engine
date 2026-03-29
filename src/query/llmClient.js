@@ -4,29 +4,281 @@ const Groq = require('groq-sdk');
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '';
+const CEREBRAS_API_KEY = process.env.CEREBRAS_API_KEY || '';
+const SAMBANOVA_API_KEY = process.env.SAMBANOVA_API_KEY || '';
+
+// ─── Model Config per Provider ────────────────────────────────────────────
+
+const NVIDIA_MODELS = {
+    SIMPLE:   'meta/llama-3.1-8b-instruct',
+    MODERATE: 'qwen/qwen2.5-coder-32b-instruct',
+    COMPLEX:  'meta/llama-3.3-70b-instruct'
+};
+
+const CEREBRAS_MODELS = {
+    SIMPLE:   'llama3.1-8b',
+    MODERATE: 'qwen-3-235b-a22b-instruct-2507',
+    COMPLEX:  'qwen-3-235b-a22b-instruct-2507'
+};
+
+const SAMBANOVA_MODELS = {
+    SIMPLE:   'Meta-Llama-3.1-8B-Instruct',
+    MODERATE: 'Qwen3-32B',
+    COMPLEX:  'Meta-Llama-3.3-70B-Instruct'
+};
+
+// ─── Provider Health Tracker ──────────────────────────────────────────────
+// Tracks remaining tokens/requests from response headers per provider.
+// Providers are dynamically sorted: healthiest first.
+
+const providerHealth = {
+    nvidia: {
+        name: 'NVIDIA',
+        hasKey: !!NVIDIA_API_KEY,
+        remainingRequests: Infinity,
+        remainingTokens: Infinity,
+        lastError: null,
+        lastSuccess: null,
+        consecutiveFailures: 0,
+        cooldownUntil: 0,
+    },
+    cerebras: {
+        name: 'Cerebras',
+        hasKey: !!CEREBRAS_API_KEY,
+        remainingRequests: Infinity,
+        remainingTokens: Infinity,
+        lastError: null,
+        lastSuccess: null,
+        consecutiveFailures: 0,
+        cooldownUntil: 0,
+    },
+    groq: {
+        name: 'Groq',
+        hasKey: !!process.env.GROQ_API_KEY,
+        remainingRequests: Infinity,
+        remainingTokens: Infinity,
+        lastError: null,
+        lastSuccess: null,
+        consecutiveFailures: 0,
+        cooldownUntil: 0,
+    },
+    openrouter: {
+        name: 'OpenRouter',
+        hasKey: !!OPENROUTER_API_KEY,
+        remainingRequests: Infinity,
+        remainingTokens: Infinity,
+        lastError: null,
+        lastSuccess: null,
+        consecutiveFailures: 0,
+        cooldownUntil: 0,
+    },
+    sambanova: {
+        name: 'SambaNova',
+        hasKey: !!SAMBANOVA_API_KEY,
+        remainingRequests: Infinity,
+        remainingTokens: Infinity,
+        lastError: null,
+        lastSuccess: null,
+        consecutiveFailures: 0,
+        cooldownUntil: 0,
+    }
+};
+
+const COOLDOWN_MS = 60000; // 1 min cooldown after 3 consecutive failures
 
 /**
- * Standardizes an API response payload via the OpenAI Chat Completions interface
+ * Update provider health from response headers.
  */
-async function generateSqlWithGroq(prompt) {
-    if (!process.env.GROQ_API_KEY) throw new Error('Groq API Key missing');
-    
-    // Choose the best reasoning / coding model on Groq
-    const completion = await groq.chat.completions.create({
-        messages: [{ role: 'user', content: prompt }],
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0,
-        max_tokens: 1500
-    });
+function updateHealth(providerId, headers) {
+    const h = providerHealth[providerId];
+    if (!h || !headers) return;
 
-    let sql = completion.choices[0]?.message?.content || "";
-    return cleanResponse(sql);
+    // Parse remaining requests (prefer per-minute, fallback to generic)
+    const remainReqMin = headers.get('x-ratelimit-remaining-requests-minute');
+    const remainReq = headers.get('x-ratelimit-remaining-requests');
+    if (remainReqMin !== null) h.remainingRequests = parseInt(remainReqMin, 10);
+    else if (remainReq !== null) h.remainingRequests = parseInt(remainReq, 10);
+
+    // Parse remaining tokens (prefer per-minute, fallback to generic)
+    const remainTokMin = headers.get('x-ratelimit-remaining-tokens-minute');
+    const remainTok = headers.get('x-ratelimit-remaining-tokens');
+    if (remainTokMin !== null) h.remainingTokens = parseInt(remainTokMin, 10);
+    else if (remainTok !== null) h.remainingTokens = parseInt(remainTok, 10);
+}
+
+function recordSuccess(providerId) {
+    const h = providerHealth[providerId];
+    h.lastSuccess = Date.now();
+    h.lastError = null;
+    h.consecutiveFailures = 0;
+    h.cooldownUntil = 0;
+}
+
+function recordFailure(providerId, errMsg) {
+    const h = providerHealth[providerId];
+    h.lastError = errMsg;
+    h.consecutiveFailures++;
+    if (h.consecutiveFailures >= 3) {
+        h.cooldownUntil = Date.now() + COOLDOWN_MS;
+    }
+    // If rate limited, set tokens/requests to 0
+    if (errMsg.includes('429') || errMsg.includes('rate limit') || errMsg.includes('Rate limit')) {
+        h.remainingRequests = 0;
+        h.remainingTokens = 0;
+    }
+    if (errMsg.includes('402') || errMsg.includes('payment')) {
+        h.remainingRequests = 0;
+    }
 }
 
 /**
- * OpenRouter acting as a robust fallback.
+ * Score a provider for sorting. Higher = healthier = tried first.
  */
-async function generateSqlWithOpenRouter(prompt) {
+function healthScore(providerId) {
+    const h = providerHealth[providerId];
+    if (!h.hasKey) return -1000;
+    if (Date.now() < h.cooldownUntil) return -500;
+
+    let score = 100;
+
+    // Penalize low remaining requests
+    if (h.remainingRequests <= 0) score -= 200;
+    else if (h.remainingRequests < 5) score -= 50;
+    else if (h.remainingRequests < 20) score -= 10;
+
+    // Penalize low remaining tokens
+    if (h.remainingTokens <= 0) score -= 200;
+    else if (h.remainingTokens < 1000) score -= 50;
+    else if (h.remainingTokens < 5000) score -= 10;
+
+    // Penalize consecutive failures
+    score -= h.consecutiveFailures * 30;
+
+    // Boost recently successful providers
+    if (h.lastSuccess && Date.now() - h.lastSuccess < 60000) score += 10;
+
+    return score;
+}
+
+/**
+ * Returns provider IDs sorted by health (best first), excluding those without keys.
+ */
+function getSortedProviders() {
+    const ids = Object.keys(providerHealth).filter(id => providerHealth[id].hasKey);
+    ids.sort((a, b) => healthScore(b) - healthScore(a));
+    return ids;
+}
+
+/**
+ * Returns current health status for all providers (for logging/API).
+ */
+function getProviderStatus() {
+    const status = {};
+    for (const [id, h] of Object.entries(providerHealth)) {
+        status[id] = {
+            name: h.name,
+            active: h.hasKey,
+            score: h.hasKey ? healthScore(id) : 'no key',
+            remainingRequests: h.remainingRequests === Infinity ? 'unknown' : h.remainingRequests,
+            remainingTokens: h.remainingTokens === Infinity ? 'unknown' : h.remainingTokens,
+            consecutiveFailures: h.consecutiveFailures,
+            cooldown: Date.now() < h.cooldownUntil,
+            lastError: h.lastError
+        };
+    }
+    return status;
+}
+
+// ─── Provider Implementations ─────────────────────────────────────────────
+
+async function callNvidia(prompt, maxTokens, temperature, complexity) {
+    if (!NVIDIA_API_KEY) throw new Error('NVIDIA API Key missing');
+    const model = NVIDIA_MODELS[complexity] || NVIDIA_MODELS.MODERATE;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+
+    const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+            'Authorization': `Bearer ${NVIDIA_API_KEY}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature,
+            max_tokens: maxTokens
+        })
+    }).finally(() => clearTimeout(timeout));
+
+    updateHealth('nvidia', response.headers);
+
+    if (!response.ok) {
+        const errBody = await response.text().catch(() => '');
+        throw new Error(`NVIDIA HTTP ${response.status} ${errBody.slice(0, 200)}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    if (!content.trim()) throw new Error('NVIDIA returned empty content');
+    return { content, model };
+}
+
+async function callCerebras(prompt, maxTokens, temperature, complexity) {
+    if (!CEREBRAS_API_KEY) throw new Error('Cerebras API Key missing');
+    const model = CEREBRAS_MODELS[complexity] || CEREBRAS_MODELS.MODERATE;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+
+    const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+            'Authorization': `Bearer ${CEREBRAS_API_KEY}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature,
+            max_tokens: maxTokens
+        })
+    }).finally(() => clearTimeout(timeout));
+
+    updateHealth('cerebras', response.headers);
+
+    if (!response.ok) {
+        const errBody = await response.text().catch(() => '');
+        throw new Error(`Cerebras HTTP ${response.status} ${errBody.slice(0, 200)}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    if (!content.trim()) throw new Error('Cerebras returned empty content');
+    return { content, model };
+}
+
+async function callGroq(prompt, maxTokens, temperature) {
+    if (!process.env.GROQ_API_KEY) throw new Error('Groq API Key missing');
+
+    const completion = await groq.chat.completions.create({
+        messages: [{ role: 'user', content: prompt }],
+        model: 'llama-3.3-70b-versatile',
+        temperature,
+        max_tokens: maxTokens
+    });
+
+    // Groq SDK doesn't expose headers directly — update from error responses only
+    const content = completion.choices[0]?.message?.content || '';
+    if (!content.trim()) throw new Error('Groq returned empty content');
+    return { content, model: 'llama-3.3-70b-versatile' };
+}
+
+async function callOpenRouter(prompt, maxTokens, temperature) {
     if (!OPENROUTER_API_KEY) throw new Error('OpenRouter API Key missing');
 
     const controller = new AbortController();
@@ -44,39 +296,82 @@ async function generateSqlWithOpenRouter(prompt) {
         body: JSON.stringify({
             model: 'meta-llama/llama-3.1-70b-instruct',
             messages: [{ role: 'user', content: prompt }],
-            temperature: 0,
-            max_tokens: 1500
+            temperature,
+            max_tokens: maxTokens
         })
     }).finally(() => clearTimeout(timeout));
 
+    // OpenRouter doesn't expose rate limit headers
     if (!response.ok) {
-        throw new Error(`OpenRouter HTTP error! status: ${response.status}`);
+        throw new Error(`OpenRouter HTTP ${response.status}`);
     }
 
     const data = await response.json();
-    let sql = data.choices[0]?.message?.content || "";
-    return cleanResponse(sql);
+    const content = data.choices?.[0]?.message?.content || '';
+    if (!content.trim()) throw new Error('OpenRouter returned empty content');
+    return { content, model: 'meta-llama/llama-3.1-70b-instruct' };
 }
 
-/**
- * Helper to strip markdown formatting and LLM preamble around SQL responses.
- * Extracts the SELECT statement even if the LLM prefixes it with commentary.
- */
+async function callSambanova(prompt, maxTokens, temperature, complexity) {
+    if (!SAMBANOVA_API_KEY) throw new Error('SambaNova API Key missing');
+    const model = SAMBANOVA_MODELS[complexity] || SAMBANOVA_MODELS.MODERATE;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+
+    const response = await fetch('https://api.sambanova.ai/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+            'Authorization': `Bearer ${SAMBANOVA_API_KEY}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature,
+            max_tokens: maxTokens
+        })
+    }).finally(() => clearTimeout(timeout));
+
+    updateHealth('sambanova', response.headers);
+
+    if (!response.ok) {
+        const errBody = await response.text().catch(() => '');
+        throw new Error(`SambaNova HTTP ${response.status} ${errBody.slice(0, 200)}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    if (!content.trim()) throw new Error('SambaNova returned empty content');
+    return { content, model };
+}
+
+// Map provider ID to call function
+const PROVIDER_FN = {
+    nvidia:     callNvidia,
+    cerebras:   callCerebras,
+    groq:       callGroq,
+    openrouter: callOpenRouter,
+    sambanova:  callSambanova,
+};
+
+// ─── Shared Utilities ─────────────────────────────────────────────────────
+
 function cleanResponse(responseBody) {
     let sql = responseBody.trim();
-
-    // Remove all standard block wrappers explicitly
     sql = sql.replace(/```sql/gi, '');
     sql = sql.replace(/```/g, '');
     sql = sql.trim();
 
-    // Strip any LLM preamble text before the actual SELECT statement
+    // Strip thinking blocks from reasoning models
+    sql = sql.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
     const selectIndex = sql.search(/\bSELECT\b/i);
     if (selectIndex > 0) {
         sql = sql.substring(selectIndex);
     }
 
-    // Remove trailing commentary after the SQL (anything after final semicolon)
     const lastSemicolon = sql.lastIndexOf(';');
     if (lastSemicolon !== -1) {
         sql = sql.substring(0, lastSemicolon + 1);
@@ -85,12 +380,7 @@ function cleanResponse(responseBody) {
     return sql.trim();
 }
 
-/**
- * Builds a prompt for natural language answer generation from query results.
- * Accepts optional business context (from knowledge base) for HYBRID queries.
- */
 function buildNLAnswerPrompt(userQuestion, rows, rowCount, context = null) {
-    // Limit rows sent to LLM to keep context window small
     const MAX_ROWS_FOR_NL = 10;
     const truncated = rows.slice(0, MAX_ROWS_FOR_NL);
     const rowsJson = JSON.stringify(truncated, null, 2);
@@ -116,88 +406,6 @@ Rules:
 - Do NOT say "based on the data" or "according to the results". Just state the answer directly.`;
 }
 
-/**
- * Generates a natural language answer from query results via Groq
- */
-async function generateNLAnswerWithGroq(prompt) {
-    if (!process.env.GROQ_API_KEY) throw new Error('Groq API Key missing');
-
-    const completion = await groq.chat.completions.create({
-        messages: [{ role: 'user', content: prompt }],
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0.1,
-        max_tokens: 300
-    });
-
-    return (completion.choices[0]?.message?.content || "").trim();
-}
-
-/**
- * Generates a natural language answer from query results via OpenRouter
- */
-async function generateNLAnswerWithOpenRouter(prompt) {
-    if (!OPENROUTER_API_KEY) throw new Error('OpenRouter API Key missing');
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 40000);
-
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-            'HTTP-Referer': 'http://localhost:3000',
-            'X-Title': 'SAP O2C Local Graph System',
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            model: 'meta-llama/llama-3.1-70b-instruct',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.1,
-            max_tokens: 300
-        })
-    }).finally(() => clearTimeout(timeout));
-
-    if (!response.ok) {
-        throw new Error(`OpenRouter HTTP error! status: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return (data.choices[0]?.message?.content || "").trim();
-}
-
-/**
- * Orchestrates NL answer generation with Groq primary, OpenRouter fallback.
- * context (optional): business explanation string from knowledgeBase, injected
- * into the prompt for HYBRID queries. Pass null for pure SQL queries.
- */
-async function generateNLAnswer(userQuestion, rows, rowCount, context = null) {
-    const prompt = buildNLAnswerPrompt(userQuestion, rows, rowCount, context);
-
-    try {
-        console.log(`[LLM-NL] Attempting Groq for NL answer...`);
-        const result = await generateNLAnswerWithGroq(prompt);
-        console.log(`[LLM-NL] Groq NL success.`);
-        return result;
-    } catch (groqErr) {
-        console.error(`[LLM-NL] Groq NL failed:`, groqErr.message);
-        try {
-            console.log(`[LLM-NL] Falling back to OpenRouter for NL answer...`);
-            const fallbackResult = await generateNLAnswerWithOpenRouter(prompt);
-            console.log(`[LLM-NL] OpenRouter NL success.`);
-            return fallbackResult;
-        } catch (openRouterErr) {
-            console.error(`[LLM-NL] OpenRouter NL failed:`, openRouterErr.message);
-            return null; // Graceful degradation: return null, caller uses summary fallback
-        }
-    }
-}
-
-/**
- * Post-processing gate: ensures the LLM output is a valid SELECT statement.
- * Throws if the cleaned output is not SQL at all (e.g. apology text, empty)
- * or exceeds the maximum safe length.
- */
 const MAX_SQL_LENGTH = 3000;
 
 function validateLLMOutput(sql) {
@@ -210,30 +418,73 @@ function validateLLMOutput(sql) {
     return sql;
 }
 
+// ─── Dynamic Orchestrators ────────────────────────────────────────────────
+
 /**
- * Orchestrator implementing graceful degradation fallback logic
+ * SQL generation with dynamic provider ordering.
+ * Providers are sorted by health score — healthiest first.
+ * Each provider uses complexity-based model routing.
  */
-async function getSqlFromLLM(prompt) {
-    try {
-        console.log(`[LLM] Attempting Groq (llama-3.1-70b-versatile)...`);
-        const result = validateLLMOutput(await generateSqlWithGroq(prompt));
-        console.log(`[LLM] Groq success.`);
-        return result;
-    } catch (groqErr) {
-        console.error(`[LLM] Groq failed:`, groqErr.message);
-        console.log(`[LLM] Falling back to OpenRouter...`);
+async function getSqlFromLLM(prompt, complexity = 'MODERATE') {
+    const order = getSortedProviders();
+    const orderStr = order.map(id => `${providerHealth[id].name}(${healthScore(id)})`).join(' → ');
+    console.log(`[LLM] Provider order: ${orderStr}`);
+
+    for (const providerId of order) {
+        const h = providerHealth[providerId];
+        const fn = PROVIDER_FN[providerId];
         try {
-            const fallbackResult = validateLLMOutput(await generateSqlWithOpenRouter(prompt));
-            console.log(`[LLM] OpenRouter fallback success.`);
-            return fallbackResult;
-        } catch (openRouterErr) {
-            console.error(`[LLM] OpenRouter failed:`, openRouterErr.message);
-            throw new Error('Both Groq and OpenRouter instances failed to generate SQL.');
+            const modelInfo = providerId === 'nvidia' ? NVIDIA_MODELS[complexity]
+                : providerId === 'cerebras' ? CEREBRAS_MODELS[complexity]
+                : providerId === 'sambanova' ? SAMBANOVA_MODELS[complexity]
+                : providerId === 'groq' ? 'llama-3.3-70b-versatile'
+                : 'llama-3.1-70b-instruct';
+
+            console.log(`[LLM] Attempting ${h.name} (${modelInfo}) for ${complexity} query...`);
+            const { content } = await fn(prompt, 1500, 0, complexity);
+            const sql = validateLLMOutput(cleanResponse(content));
+            recordSuccess(providerId);
+            console.log(`[LLM] ${h.name} success. [Remaining: req=${h.remainingRequests}, tok=${h.remainingTokens}]`);
+            return sql;
+        } catch (err) {
+            recordFailure(providerId, err.message);
+            console.error(`[LLM] ${h.name} failed:`, err.message);
         }
     }
+
+    throw new Error(`All LLM providers (${order.map(id => providerHealth[id].name).join(', ')}) failed to generate SQL.`);
+}
+
+/**
+ * NL answer generation with dynamic provider ordering.
+ */
+async function generateNLAnswer(userQuestion, rows, rowCount, context = null, complexity = 'SIMPLE') {
+    const prompt = buildNLAnswerPrompt(userQuestion, rows, rowCount, context);
+    const order = getSortedProviders();
+
+    for (const providerId of order) {
+        const h = providerHealth[providerId];
+        const fn = PROVIDER_FN[providerId];
+        try {
+            console.log(`[LLM-NL] Attempting ${h.name} for NL answer...`);
+            const { content } = await fn(prompt, 300, 0.1, complexity);
+            recordSuccess(providerId);
+            console.log(`[LLM-NL] ${h.name} NL success.`);
+            return content.trim();
+        } catch (err) {
+            recordFailure(providerId, err.message);
+            console.error(`[LLM-NL] ${h.name} NL failed:`, err.message);
+        }
+    }
+
+    return null; // Graceful degradation
 }
 
 module.exports = {
     getSqlFromLLM,
-    generateNLAnswer
+    generateNLAnswer,
+    getProviderStatus,
+    NVIDIA_MODELS,
+    CEREBRAS_MODELS,
+    SAMBANOVA_MODELS
 };

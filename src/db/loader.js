@@ -119,7 +119,7 @@ async function loadDataset(config) {
     // Uploaded configs arrive as JSON (no functions). If a table matches a
     // default config table, inherit its transforms so padding etc. is preserved.
     let transforms = t.transforms || {};
-    if (Object.keys(transforms).length === 0) {
+    if (Object.keys(transforms).length === 0 && config.name === defaultConfig.name) {
       const defaultTable = defaultConfig.tables.find(dt => dt.name === t.name);
       if (defaultTable?.transforms) transforms = defaultTable.transforms;
     }
@@ -173,7 +173,12 @@ async function main() {
   const config = getActiveConfig();
   await loadDataset(config);
 
-  await runValidationQueries();
+  // Only run O2C-specific validation for the default dataset
+  if (config.name === 'sap_o2c') {
+    await runValidationQueries();
+  } else {
+    console.log('\n--- Skipping O2C-specific validation for generic dataset ---');
+  }
 
   db.close();
 }

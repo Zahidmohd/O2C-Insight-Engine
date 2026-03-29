@@ -26,3 +26,6 @@ npm-debug.log*
 # Build
 dist/
 build/
+
+# Uploaded datasets
+datasets/
