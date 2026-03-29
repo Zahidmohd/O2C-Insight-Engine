@@ -126,9 +126,12 @@ function inferColumns(records) {
 /** Suffixes that suggest a column is an identifier */
 const ID_SUFFIXES = ['id', '_id', 'key', 'code', 'number', 'no', 'num', 'ref'];
 
+/** Substrings that indicate a datetime/timestamp column — rarely a real PK */
+const DATETIME_HINTS = ['date', 'time', 'timestamp', 'created', 'modified', 'changed', 'updated'];
+
 /**
  * Detects primary key candidates: columns where all sampled values are unique and non-null.
- * Prefers columns with ID-like suffixes.
+ * Priority: ID-suffix columns (0) > regular columns (1) > datetime columns (2).
  * @param {object[]} records
  * @param {string[]} columns
  * @param {number} sampleSize
@@ -152,11 +155,19 @@ function detectPrimaryKeyCandidates(records, columns, sampleSize = 500) {
         if (uniqueValues.size === values.length) {
             const lowerCol = col.toLowerCase();
             const hasIdSuffix = ID_SUFFIXES.some(s => lowerCol.endsWith(s));
-            candidates.push({ col, priority: hasIdSuffix ? 0 : 1 });
+            const isDatetime = DATETIME_HINTS.some(h => lowerCol.includes(h));
+
+            // Priority: 0 = ID suffix (best), 1 = regular, 2 = datetime (worst)
+            let priority;
+            if (hasIdSuffix) priority = 0;
+            else if (isDatetime) priority = 2;
+            else priority = 1;
+
+            candidates.push({ col, priority });
         }
     }
 
-    // Sort: ID-suffix columns first, then alphabetical
+    // Sort: ID-suffix first, then regular, then datetime; within same priority: alphabetical
     candidates.sort((a, b) => a.priority - b.priority || a.col.localeCompare(b.col));
 
     // Return best single-column candidate

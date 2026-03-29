@@ -214,6 +214,7 @@ function extractHighlightNodes(sql) {
 
 function extractHighlightNodesO2C(sql) {
     const highlights = [];
+    if (!sql) return highlights;
     const idRegex = /(?:billingDocument|salesOrder|customer|accountingDocument|deliveryDocument|soldToParty)\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/gi;
     let match;
     while ((match = idRegex.exec(sql)) !== null) {
@@ -230,6 +231,7 @@ function extractHighlightNodesO2C(sql) {
 
 function extractHighlightNodesGeneric(sql, config) {
     const highlights = [];
+    if (!sql) return highlights;
     // Build regex from tables with single-column primary keys
     for (const t of config.tables) {
         if (!t.primaryKey || t.primaryKey.length !== 1) continue;
@@ -515,7 +517,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 query: naturalLanguageQuery
             };
         }
-        const context = retrieveContext(naturalLanguageQuery);
+        const context = await retrieveContext(naturalLanguageQuery);
         console.log(`${tag} [RESULT] RAG response dispatched (rowCount: 0).`);
         return {
             success: true,
@@ -865,7 +867,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         // null is handled gracefully by generateNLAnswer — no degradation on KB miss.
         let ragContext = null;
         if (queryType === 'HYBRID') {
-            ragContext = retrieveContext(naturalLanguageQuery);
+            ragContext = await retrieveContext(naturalLanguageQuery);
             console.log(`${tag} [QUERY_TYPE] HYBRID — KB context ${ragContext ? 'found' : 'not found, proceeding with SQL only'}.`);
         }
 
@@ -896,7 +898,11 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             // Build simple nodes without relationships
             const aggNodes = dbResult.rows.map((row, i) => {
                 const keys = Object.keys(row);
-                
+
+                if (keys.length === 0) {
+                    return { id: `agg_node_${i}`, label: 'Empty', type: 'Aggregation', properties: row };
+                }
+
                 if (keys.length === 1) {
                     const metricKey = keys[0];
                     return {

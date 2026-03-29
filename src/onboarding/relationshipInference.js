@@ -6,7 +6,7 @@
  */
 
 const SAMPLE_SIZE = 200;
-const MIN_CONFIDENCE = 0.6;
+const MIN_CONFIDENCE = 0.5;
 const MAX_SUGGESTIONS = 20;
 
 // ─── Column Name Matching ──────────────────────────────────────────────────
@@ -233,10 +233,10 @@ function scoreRelationship(tableA, colA, tableB, colB, recordsA, recordsB) {
         reasons.push(nameMatch.reason);
     }
 
-    // 2. Value overlap
+    // 2. Value overlap — weighted higher (0.6) so strong overlap alone can pass threshold
     const overlap = computeValueOverlap(recordsA, colA, recordsB, colB);
     if (overlap.checked > 0 && overlap.ratio > 0) {
-        const overlapScore = overlap.ratio * 0.5;
+        const overlapScore = overlap.ratio * 0.6;
         totalScore += overlapScore;
         reasons.push(`${Math.round(overlap.ratio * 100)}% value overlap (${overlap.checked} values checked)`);
     }
