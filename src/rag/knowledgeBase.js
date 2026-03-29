@@ -1,11 +1,13 @@
 /**
- * Lightweight in-memory knowledge base for SAP O2C business concepts.
- * No embeddings or vector DB — pure keyword matching against a curated dictionary.
+ * Knowledge base with dual-path retrieval:
+ * 1. Vector search — if documents have been uploaded, embed the query and search chunks
+ * 2. Keyword fallback — curated SAP O2C dictionary with word-boundary matching
  *
- * retrieveContext(query) → string | null
- *   Returns an explanation string on keyword match, or null if no entry found.
- *   Callers handle null gracefully (HYBRID falls back to SQL-only NL answer).
+ * retrieveContext(query) → Promise<string | null>
  */
+
+const { getChunkCount, searchSimilar } = require('./vectorStore');
+const { embed } = require('./embeddingService');
 
 const KB = [
     {
@@ -50,12 +52,31 @@ const KB = [
     }
 ];
 
-function retrieveContext(query) {
+/**
+ * Retrieves context for a query using vector search (if documents exist) or keyword matching.
+ * @param {string} query
+ * @returns {Promise<string | null>}
+ */
+async function retrieveContext(query) {
+    // 1. Try vector search if documents have been uploaded
+    try {
+        const chunkCount = getChunkCount();
+        if (chunkCount > 0) {
+            const queryEmbedding = await embed(query);
+            const results = searchSimilar(queryEmbedding, 5, 0.3);
+            if (results.length > 0) {
+                console.log(`[RAG] Vector search returned ${results.length} chunks (top score: ${results[0].score.toFixed(3)})`);
+                return results.map(r => r.text).join('\n\n');
+            }
+        }
+    } catch (err) {
+        console.warn('[RAG] Vector search failed, falling back to keyword KB:', err.message);
+    }
+
+    // 2. Fall back to keyword matching
     const lower = query.toLowerCase();
     for (const entry of KB) {
         if (entry.keywords.some(kw => {
-            // Use word boundary regex to avoid substring false positives
-            // e.g. "plant" should not match "planting"
             const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             return new RegExp(`\\b${escaped}\\b`).test(lower);
         })) {

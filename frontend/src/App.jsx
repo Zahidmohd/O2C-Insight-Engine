@@ -50,6 +50,9 @@ function App() {
   const [editedRelationships, setEditedRelationships] = useState(null);
   const [datasetName, setDatasetName] = useState('');
   const [providerHealth, setProviderHealth] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [docUploadStatus, setDocUploadStatus] = useState(null);
+  const docFileInputRef = useRef(null);
 
   const cyRef = useRef(null);
   const cyContainerRef = useRef(null);
@@ -215,6 +218,53 @@ function App() {
     setEditedRelationships(null);
     setDatasetName('');
     setUploadStatus(null);
+  };
+
+  const fetchDocuments = () => {
+    fetch(`${API_BASE}/api/documents`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) setDocuments(data.documents || []);
+      })
+      .catch(() => {});
+  };
+
+  const handleDocumentUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setDocUploadStatus('loading');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('title', file.name.replace(/\.[^.]+$/, ''));
+
+      const res = await axios.post(`${API_BASE}/api/documents/upload`, formData, {
+        timeout: 300000,
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      if (res.data.success) {
+        setDocUploadStatus({ success: true, message: `"${res.data.title}" uploaded — ${res.data.chunkCount} chunks created.` });
+        fetchDocuments();
+      } else {
+        setDocUploadStatus({ success: false, message: res.data.error?.message || 'Upload failed.' });
+      }
+    } catch (err) {
+      const msg = err.response?.data?.error?.message || err.message || 'Upload failed.';
+      setDocUploadStatus({ success: false, message: msg });
+    } finally {
+      if (docFileInputRef.current) docFileInputRef.current.value = '';
+    }
+  };
+
+  const handleDeleteDocument = async (id) => {
+    try {
+      await axios.delete(`${API_BASE}/api/documents/${id}`);
+      fetchDocuments();
+    } catch (err) {
+      console.error('Failed to delete document:', err);
+    }
   };
 
   useEffect(() => {
@@ -620,6 +670,9 @@ function App() {
                 <button className={`mode-btn ${uploadMode === 'raw' ? 'active' : ''}`} onClick={() => { setUploadMode('raw'); resetOnboarding(); }}>
                   Upload Raw Data
                 </button>
+                <button className={`mode-btn ${uploadMode === 'documents' ? 'active' : ''}`} onClick={() => { setUploadMode('documents'); resetOnboarding(); setDocUploadStatus(null); fetchDocuments(); }}>
+                  Documents
+                </button>
               </div>
 
               {/* Config Mode */}
@@ -650,7 +703,7 @@ function App() {
               {uploadMode === 'raw' && onboardingStep === 0 && (
                 <>
                   <p className="modal-description">
-                    Upload your data files (JSONL or CSV). The system will automatically detect the schema
+                    Upload your data files (JSONL, CSV, or ZIP containing multiple files). The system will automatically detect the schema
                     and suggest relationships between tables.
                   </p>
                   <label className="file-upload-label">
@@ -658,7 +711,7 @@ function App() {
                       ref={rawFileInputRef}
                       type="file"
                       multiple
-                      accept=".jsonl,.csv,.json"
+                      accept=".jsonl,.csv,.json,.zip"
                       onChange={handleRawUpload}
                       disabled={uploadStatus === 'loading'}
                       className="file-input-hidden"
@@ -801,6 +854,57 @@ function App() {
                       {uploadStatus === 'loading' ? 'Loading...' : 'Confirm & Load'}
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* Documents Mode */}
+              {uploadMode === 'documents' && (
+                <div className="documents-section">
+                  <p className="modal-description">
+                    Upload documents (PDF, TXT, MD, DOCX) to enhance the knowledge base. RAG queries will search these documents for context.
+                  </p>
+                  <label className="file-upload-label">
+                    <input
+                      ref={docFileInputRef}
+                      type="file"
+                      accept=".pdf,.txt,.md,.docx"
+                      onChange={handleDocumentUpload}
+                      disabled={docUploadStatus === 'loading'}
+                      className="file-input-hidden"
+                    />
+                    <span className="file-upload-btn">
+                      {docUploadStatus === 'loading' ? 'Processing document...' : 'Upload Document'}
+                    </span>
+                  </label>
+
+                  {docUploadStatus && docUploadStatus !== 'loading' && (
+                    <div className={`upload-status ${docUploadStatus.success ? 'upload-success' : 'upload-error'}`}>
+                      {docUploadStatus.message}
+                    </div>
+                  )}
+                  {docUploadStatus === 'loading' && (
+                    <div className="upload-status upload-loading">
+                      <div className="dot-pulse"><span></span><span></span><span></span></div>
+                      Extracting, chunking & embedding document...
+                    </div>
+                  )}
+
+                  {documents.length > 0 ? (
+                    <div className="document-list">
+                      {documents.map(doc => (
+                        <div key={doc.id} className="document-card">
+                          <div className="document-info">
+                            <span className="doc-chip">{doc.file_type.toUpperCase()}</span>
+                            <span className="document-title">{doc.title}</span>
+                            <span className="document-meta">{doc.chunk_count} chunks</span>
+                          </div>
+                          <button className="doc-delete-btn" onClick={() => handleDeleteDocument(doc.id)} title="Delete document">&times;</button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="no-documents">No documents uploaded yet. Upload documents to enable vector-powered RAG answers.</div>
+                  )}
                 </div>
               )}
 

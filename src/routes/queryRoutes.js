@@ -14,6 +14,7 @@ const { validateDatasetConfig } = require('../config/datasetValidator');
 const { inferSchema, recordsToJSONL } = require('../onboarding/schemaInference');
 const { inferRelationships } = require('../onboarding/relationshipInference');
 const { generateConfig } = require('../onboarding/configGenerator');
+const { extractZip } = require('../rag/zipExtractor');
 
 /**
  * Global dataset update lock — prevents queries from executing against a
@@ -65,7 +66,7 @@ function rateLimit(req, res, next) {
 
 // ─── Multer Configuration ────────────────────────────────────────────────────
 const UPLOAD_TEMP_DIR = path.join(os.tmpdir(), 'o2c-onboarding-uploads');
-const ALLOWED_EXTENSIONS = ['.jsonl', '.csv', '.json'];
+const ALLOWED_EXTENSIONS = ['.jsonl', '.csv', '.json', '.zip'];
 
 const upload = multer({
     dest: UPLOAD_TEMP_DIR,
@@ -154,11 +155,28 @@ router.post('/dataset/upload/raw', rateLimit, upload.array('files', 20), async (
             });
         }
 
-        // Read uploaded files
+        // Read uploaded files — extract ZIP contents inline
         const files = [];
         for (const file of req.files) {
-            const content = fs.readFileSync(file.path, 'utf8');
-            files.push({ filename: file.originalname, content });
+            const ext = path.extname(file.originalname).toLowerCase();
+            if (ext === '.zip') {
+                try {
+                    const zipFiles = extractZip(file.path);
+                    files.push(...zipFiles);
+                } catch (zipErr) {
+                    // Clean up all multer temp files before returning
+                    for (const f of req.files) {
+                        fs.unlink(f.path, () => {});
+                    }
+                    return res.status(400).json({
+                        success: false,
+                        error: { message: `ZIP extraction failed: ${zipErr.message}`, type: 'VALIDATION_ERROR' }
+                    });
+                }
+            } else {
+                const content = fs.readFileSync(file.path, 'utf8');
+                files.push({ filename: file.originalname, content });
+            }
         }
 
         // Infer schema

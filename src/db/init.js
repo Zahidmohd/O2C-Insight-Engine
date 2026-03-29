@@ -33,7 +33,7 @@ async function initDB(config = null) {
         if (config) {
             console.log('Dropping existing tables for dataset switch...');
             const existingTables = db.prepare(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('documents', 'document_chunks')"
             ).all();
             for (const t of existingTables) {
                 db.exec(`DROP TABLE IF EXISTS "${t.name}"`);

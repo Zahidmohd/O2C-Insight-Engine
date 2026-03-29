@@ -3,7 +3,9 @@ const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
 const queryRoutes = require('./routes/queryRoutes');
+const documentRoutes = require('./routes/documentRoutes');
 const db = require('./db/connection');
+const { initDocumentTables } = require('./rag/vectorStore');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,7 +21,7 @@ app.use(cors({
     origin: process.env.ALLOWED_ORIGINS
         ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
         : ['http://localhost:3000', 'http://localhost:5173'],
-    methods: ['GET', 'POST'],
+    methods: ['GET', 'POST', 'DELETE'],
 }));
 
 app.use(express.json());
@@ -34,8 +36,12 @@ app.use((req, res, next) => {
     next();
 });
 
+// Initialize document tables before mounting routes
+initDocumentTables();
+
 // Routes
 app.use('/api', queryRoutes);
+app.use('/api', documentRoutes);
 
 // SPA catch-all — serve index.html for any non-API route
 app.get('/{*path}', (req, res) => {
