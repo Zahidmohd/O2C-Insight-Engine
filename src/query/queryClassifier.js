@@ -8,7 +8,7 @@
  * and "why" (HYBRID signal) — must route to HYBRID so SQL still executes.
  */
 
-const { domainKeywords } = require('../config/datasetConfig');
+const { getActiveConfig } = require('../config/activeDataset');
 
 const HYBRID_KEYWORDS = [
     'why', 'reason', 'context', 'background', 'tell me about'
@@ -20,10 +20,11 @@ const RAG_KEYWORDS = [
 ];
 
 function classifyQuery(query) {
+    const config = getActiveConfig();
     const lower = query.toLowerCase();
 
-    // Domain gate — reject queries with no O2C relevance
-    if (!domainKeywords.some(kw => lower.includes(kw))) return 'INVALID';
+    // Domain gate — reject queries with no relevance to active dataset
+    if (!config.domainKeywords.some(kw => lower.includes(kw))) return 'INVALID';
 
     // HYBRID first — these queries need both SQL data AND business context
     if (HYBRID_KEYWORDS.some(kw => lower.includes(kw))) return 'HYBRID';

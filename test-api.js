@@ -39,22 +39,39 @@ function assert(condition, label) {
     }
 }
 
-async function runTest(name, body, checks) {
+async function runTest(name, body, checks, { retries = 0 } = {}) {
     console.log(`\n${BOLD}${CYAN}▸ ${name}${RESET}`);
     console.log(`${DIM}  POST /api/query ${JSON.stringify(body)}${RESET}`);
 
     let res;
-    try {
-        res = await post(body);
-    } catch (e) {
-        console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
-        console.log(`  ${YELLOW}  Is the server running at ${BASE_URL}?${RESET}`);
-        failed++;
-        return;
+    let attempt = 0;
+    const maxAttempts = 1 + retries;
+
+    while (attempt < maxAttempts) {
+        attempt++;
+        try {
+            res = await post(body);
+        } catch (e) {
+            if (attempt < maxAttempts) {
+                console.log(`  ${YELLOW}⟳ Attempt ${attempt} failed (${e.message}), retrying...${RESET}`);
+                continue;
+            }
+            console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
+            console.log(`  ${YELLOW}  Is the server running at ${BASE_URL}?${RESET}`);
+            failed++;
+            return;
+        }
+
+        // Retry on LLM timeouts (HTTP 400 with LLM_ERROR) if retries remain
+        if (attempt < maxAttempts && res.status === 400 && res.data?.error?.type === 'LLM_ERROR') {
+            console.log(`  ${YELLOW}⟳ Attempt ${attempt} got LLM_ERROR, retrying...${RESET}`);
+            continue;
+        }
+        break;
     }
 
     const d = res.data;
-    console.log(`${DIM}  HTTP ${res.status} | success=${d.success} | reason=${d.reason || '-'} | queryType=${d.queryType || '-'} | rowCount=${d.rowCount ?? '-'}${RESET}`);
+    console.log(`${DIM}  HTTP ${res.status} | success=${d.success} | reason=${d.reason || '-'} | queryType=${d.queryType || '-'} | rowCount=${d.rowCount ?? '-'}${attempt > 1 ? ` | attempt=${attempt}` : ''}${RESET}`);
 
     let allPassed = true;
     for (const [label, fn] of checks) {
@@ -94,14 +111,11 @@ async function main() {
 
     // ── 2. GUARDRAILS ─────────────────────────────────────────
 
-    // NOTE: "What is..." matches the RAG classifier before domain guardrail fires,
-    // so it routes to RAG and returns a "no context found" answer rather than a hard block.
-    await runTest('RAG catches "what is" queries (even off-topic)', { query: 'What is the capital of France?' }, [
-        ['success=true',           (_, d) => d.success === true],
-        ['queryType=RAG',          (_, d) => d.queryType === 'RAG'],
-        ['reason=RAG_RESPONSE',    (_, d) => d.reason === 'RAG_RESPONSE'],
-        ['no sql generated',       (_, d) => !d.sql],
-        ['nlAnswer is string',     (_, d) => typeof d.nlAnswer === 'string'],
+    // NOTE: The classifier runs a domain gate FIRST — "capital of France" has no O2C
+    // keywords, so it is rejected as INVALID before RAG classification fires.
+    await runTest('Off-topic "what is" blocked by domain gate', { query: 'What is the capital of France?' }, [
+        ['success=false',          (_, d) => d.success === false],
+        ['VALIDATION_ERROR type',  (_, d) => d.error?.type === 'VALIDATION_ERROR'],
     ]);
 
     await runTest('Guardrail: no intent word blocked', { query: 'xyzzy frobble wumpus' }, [
@@ -136,7 +150,7 @@ async function main() {
         ['explanation exists',  (_, d) => d.explanation != null],
         ['confidence is number',(_, d) => typeof d.confidence === 'number'],
         ['no sql (default)',    (_, d) => d.sql === undefined || d.sql === null],
-    ]);
+    ], { retries: 2 });
 
     // ── 5. SQL QUERIES ────────────────────────────────────────
 
@@ -170,7 +184,7 @@ async function main() {
         ['graph has edges',       (_, d) => d.graph?.edges?.length > 0],
         ['explanation.intent=trace', (_, d) => d.explanation?.intent === 'trace'],
         ['strategy=multi-hop join',  (_, d) => d.explanation?.strategy?.includes('multi-hop')],
-    ]);
+    ], { retries: 2 });
 
     await runTest('SQL: Top customers by billing amount', { query: 'Top 5 customers by total billing amount' }, [
         ['success=true',    (_, d) => d.success === true],
@@ -186,7 +200,7 @@ async function main() {
         ['suggestions present',  (_, d) => Array.isArray(d.suggestions) && d.suggestions.length > 0],
         ['rowCount=0',           (_, d) => d.rowCount === 0],
         ['message present',      (_, d) => typeof d.message === 'string'],
-    ]);
+    ], { retries: 2 });
 
     // ── 7. SQL VISIBILITY CONTROL ─────────────────────────────
 
@@ -228,6 +242,208 @@ async function main() {
     await runTest('Confidence: aggregation reduces score', { query: 'How many delivery documents are there?' }, [
         ['success=true',          (_, d) => d.success === true],
         ['confidence < 1',        (_, d) => d.confidence < 1],
+    ]);
+
+    // ── 10. DATASET METADATA ENDPOINT ──────────────────────────
+
+    console.log(`\n${BOLD}${CYAN}▸ Dataset metadata endpoint${RESET}`);
+    console.log(`${DIM}  GET /api/dataset${RESET}`);
+
+    let datasetRes;
+    try {
+        const r = await fetch(`${BASE_URL}/api/dataset`);
+        datasetRes = { status: r.status, data: await r.json() };
+    } catch (e) {
+        console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
+        failed++;
+        datasetRes = null;
+    }
+
+    if (datasetRes) {
+        const dd = datasetRes.data;
+        console.log(`${DIM}  HTTP ${datasetRes.status} | name=${dd.name} | tables=${dd.tableCount}${RESET}`);
+
+        let allPassed = true;
+        for (const [label, fn] of [
+            ['HTTP 200',                   () => datasetRes.status === 200],
+            ['name is sap_o2c',            () => dd.name === 'sap_o2c'],
+            ['displayName present',        () => typeof dd.displayName === 'string' && dd.displayName.length > 0],
+            ['tables is array',            () => Array.isArray(dd.tables) && dd.tables.length > 0],
+            ['tableCount matches',         () => dd.tableCount === dd.tables.length],
+            ['relationships is array',     () => Array.isArray(dd.relationships) && dd.relationships.length > 0],
+            ['first table has columns',    () => Array.isArray(dd.tables[0]?.columns) && dd.tables[0].columns.length > 0],
+            ['first table has primaryKey', () => Array.isArray(dd.tables[0]?.primaryKey) && dd.tables[0].primaryKey.length > 0],
+        ]) {
+            const ok = assert(fn(), label);
+            if (!ok) allPassed = false;
+        }
+        if (allPassed) passed++; else failed++;
+    }
+
+    // ── 11. DATASET FIELD IN QUERY RESPONSE ──────────────────
+
+    await runTest('Response includes dataset field', { query: 'List all sales orders' }, [
+        ['success=true',         (_, d) => d.success === true],
+        ['dataset=sap_o2c',      (_, d) => d.dataset === 'sap_o2c'],
+    ]);
+
+    // ── 12. DATASET UPLOAD ENDPOINT ─────────────────────────────
+
+    // Helper for POST /api/dataset/upload
+    async function postUpload(body) {
+        const r = await fetch(`${BASE_URL}/api/dataset/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        return { status: r.status, data: await r.json() };
+    }
+
+    // 12a. Validation: missing config object
+    console.log(`\n${BOLD}${CYAN}▸ Upload: missing config object${RESET}`);
+    console.log(`${DIM}  POST /api/dataset/upload {}${RESET}`);
+    try {
+        const r = await postUpload({});
+        console.log(`${DIM}  HTTP ${r.status}${RESET}`);
+        let allPassed = true;
+        for (const [label, fn] of [
+            ['HTTP 400',            () => r.status === 400],
+            ['success=false',       () => r.data.success === false],
+            ['VALIDATION_ERROR',    () => r.data.error?.type === 'VALIDATION_ERROR'],
+        ]) { if (!assert(fn(), label)) allPassed = false; }
+        if (allPassed) passed++; else failed++;
+    } catch (e) {
+        console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
+        failed++;
+    }
+
+    // 12b. Validation: config missing name
+    console.log(`\n${BOLD}${CYAN}▸ Upload: config missing name${RESET}`);
+    console.log(`${DIM}  POST /api/dataset/upload { config: { tables: [...] } }${RESET}`);
+    try {
+        const r = await postUpload({ config: { tables: [{ name: 'x', columns: ['a'] }], relationships: [{}], domainKeywords: ['x'] } });
+        console.log(`${DIM}  HTTP ${r.status}${RESET}`);
+        let allPassed = true;
+        for (const [label, fn] of [
+            ['HTTP 400',            () => r.status === 400],
+            ['VALIDATION_ERROR',    () => r.data.error?.type === 'VALIDATION_ERROR'],
+        ]) { if (!assert(fn(), label)) allPassed = false; }
+        if (allPassed) passed++; else failed++;
+    } catch (e) {
+        console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
+        failed++;
+    }
+
+    // 12c. Validation: empty tables array
+    console.log(`\n${BOLD}${CYAN}▸ Upload: empty tables array${RESET}`);
+    console.log(`${DIM}  POST /api/dataset/upload { config: { name: 'x', tables: [] } }${RESET}`);
+    try {
+        const r = await postUpload({ config: { name: 'x', tables: [], relationships: [{}], domainKeywords: ['x'] } });
+        console.log(`${DIM}  HTTP ${r.status}${RESET}`);
+        let allPassed = true;
+        for (const [label, fn] of [
+            ['HTTP 400',            () => r.status === 400],
+            ['VALIDATION_ERROR',    () => r.data.error?.type === 'VALIDATION_ERROR'],
+        ]) { if (!assert(fn(), label)) allPassed = false; }
+        if (allPassed) passed++; else failed++;
+    } catch (e) {
+        console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
+        failed++;
+    }
+
+    // 12d. Validation: table missing columns
+    console.log(`\n${BOLD}${CYAN}▸ Upload: table missing columns${RESET}`);
+    console.log(`${DIM}  POST /api/dataset/upload { config: { ... table without columns } }${RESET}`);
+    try {
+        const r = await postUpload({ config: { name: 'x', tables: [{ name: 't1' }], relationships: [{}], domainKeywords: ['x'] } });
+        console.log(`${DIM}  HTTP ${r.status}${RESET}`);
+        let allPassed = true;
+        for (const [label, fn] of [
+            ['HTTP 400',            () => r.status === 400],
+            ['VALIDATION_ERROR',    () => r.data.error?.type === 'VALIDATION_ERROR'],
+        ]) { if (!assert(fn(), label)) allPassed = false; }
+        if (allPassed) passed++; else failed++;
+    } catch (e) {
+        console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
+        failed++;
+    }
+
+    // 12e. Validation: missing relationships
+    console.log(`\n${BOLD}${CYAN}▸ Upload: missing relationships${RESET}`);
+    console.log(`${DIM}  POST /api/dataset/upload { config: { ... no relationships } }${RESET}`);
+    try {
+        const r = await postUpload({ config: { name: 'x', tables: [{ name: 't1', columns: ['a'] }], relationships: [], domainKeywords: ['x'] } });
+        console.log(`${DIM}  HTTP ${r.status}${RESET}`);
+        let allPassed = true;
+        for (const [label, fn] of [
+            ['HTTP 400',            () => r.status === 400],
+            ['VALIDATION_ERROR',    () => r.data.error?.type === 'VALIDATION_ERROR'],
+        ]) { if (!assert(fn(), label)) allPassed = false; }
+        if (allPassed) passed++; else failed++;
+    } catch (e) {
+        console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
+        failed++;
+    }
+
+    // 12f. Validation: missing domainKeywords
+    console.log(`\n${BOLD}${CYAN}▸ Upload: missing domainKeywords${RESET}`);
+    console.log(`${DIM}  POST /api/dataset/upload { config: { ... no domainKeywords } }${RESET}`);
+    try {
+        const r = await postUpload({ config: { name: 'x', tables: [{ name: 't1', columns: ['a'] }], relationships: [{ from: 'a', to: 'b' }] } });
+        console.log(`${DIM}  HTTP ${r.status}${RESET}`);
+        let allPassed = true;
+        for (const [label, fn] of [
+            ['HTTP 400',            () => r.status === 400],
+            ['VALIDATION_ERROR',    () => r.data.error?.type === 'VALIDATION_ERROR'],
+        ]) { if (!assert(fn(), label)) allPassed = false; }
+        if (allPassed) passed++; else failed++;
+    } catch (e) {
+        console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
+        failed++;
+    }
+
+    // 12g. Re-upload SAP config — verifies activation flow works end-to-end
+    // After this, the system should be back to the SAP dataset and queries should still work
+    console.log(`\n${BOLD}${CYAN}▸ Upload: re-upload SAP O2C config (activation flow)${RESET}`);
+    console.log(`${DIM}  POST /api/dataset/upload { config: sapConfig }${RESET}`);
+    try {
+        // Build a minimal SAP config that exercises the full activation path
+        // We use the GET /api/dataset endpoint to fetch the current config shape
+        const metaRes = await fetch(`${BASE_URL}/api/dataset`);
+        const meta = await metaRes.json();
+
+        const sapConfig = {
+            name: meta.name,
+            displayName: meta.displayName,
+            description: meta.description,
+            tables: meta.tables,
+            relationships: meta.relationships,
+            domainKeywords: ['order', 'sales', 'billing', 'delivery', 'invoice', 'customer'],
+            dataDir: '../../sap-o2c-data'
+        };
+
+        const r = await postUpload({ config: sapConfig });
+        console.log(`${DIM}  HTTP ${r.status} | ${JSON.stringify(r.data).slice(0, 120)}${RESET}`);
+
+        let allPassed = true;
+        for (const [label, fn] of [
+            ['HTTP 200',                () => r.status === 200],
+            ['success=true',            () => r.data.success === true],
+            ['dataset=sap_o2c',         () => r.data.dataset === 'sap_o2c'],
+            ['tablesCreated > 0',       () => r.data.tablesCreated > 0],
+            ['rowsLoaded >= 0',         () => r.data.rowsLoaded >= 0],
+        ]) { if (!assert(fn(), label)) allPassed = false; }
+        if (allPassed) passed++; else failed++;
+    } catch (e) {
+        console.log(`  ${RED}✗ Connection failed: ${e.message}${RESET}`);
+        failed++;
+    }
+
+    // 12h. After re-upload, verify queries still work
+    await runTest('Post-upload: query still works', { query: 'List all sales orders' }, [
+        ['success=true',        (_, d) => d.success === true],
+        ['dataset=sap_o2c',     (_, d) => d.dataset === 'sap_o2c'],
+        ['rowCount > 0',        (_, d) => d.rowCount > 0],
     ]);
 
     // ── SUMMARY ───────────────────────────────────────────────

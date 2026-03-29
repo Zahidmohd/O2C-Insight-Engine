@@ -1,7 +1,34 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import cytoscape from 'cytoscape';
 import './App.css';
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error, info) {
+    console.error('ErrorBoundary caught:', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="error-boundary">
+          <div className="error-boundary-content">
+            <h2>Something went wrong</h2>
+            <p>An unexpected error occurred. Please refresh the page to try again.</p>
+            <button onClick={() => window.location.reload()}>Refresh Page</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function App() {
   const [query, setQuery] = useState('');
@@ -13,12 +40,22 @@ function App() {
   const [showLabels, setShowLabels] = useState(true);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [showSql, setShowSql] = useState(false);
+  const [datasetInfo, setDatasetInfo] = useState(null);
 
   const cyRef = useRef(null);
   const cyContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const isDraggingTooltip = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
+
+  // Fetch active dataset metadata on mount
+  useEffect(() => {
+    const API_BASE = import.meta.env.VITE_API_URL || '';
+    fetch(`${API_BASE}/api/dataset`)
+      .then(r => r.json())
+      .then(data => setDatasetInfo(data))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -244,13 +281,14 @@ function App() {
 
   const handleSearch = async (e) => {
     e.preventDefault();
-    if (!query.trim()) return;
+    if (!query.trim() || isLoading) return;
 
     setIsLoading(true);
     setError(null);
     setResultInfo(null);
     setSelectedNode(null);
     const currentQuery = query.trim();
+    setQuery('');
 
     if (cyRef.current) {
       cyRef.current.destroy();
@@ -259,12 +297,14 @@ function App() {
 
     try {
       const API_BASE = import.meta.env.VITE_API_URL || '';
-      const response = await axios.post(`${API_BASE}/api/query`, { query, includeSql: showSql });
-      const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, queryPlan, truncated, message } = response.data;
+      const response = await axios.post(`${API_BASE}/api/query`, { query: currentQuery, includeSql: showSql }, { timeout: 30000 });
+      const { success, requestId, dataset, queryType, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, queryPlan, truncated, message } = response.data;
 
       if (success) {
         const info = {
           requestId,
+          dataset: dataset || null,
+          queryType: queryType || null,
           query: reqQuery,
           rowCount,
           executionTimeMs: Number(executionTimeMs).toFixed(2),
@@ -292,7 +332,9 @@ function App() {
     } catch (err) {
       console.error(err);
       let errMsg = 'An error occurred connecting to the API.';
-      if (err.response?.data?.error) {
+      if (err.code === 'ECONNABORTED') {
+        errMsg = 'Request timed out. The server took too long to respond — please try again.';
+      } else if (err.response?.data?.error) {
         errMsg = typeof err.response.data.error === 'object'
           ? err.response.data.error.message
           : err.response.data.error;
@@ -333,14 +375,24 @@ function App() {
     });
   };
 
+  const dsName = datasetInfo?.displayName || 'Loading...';
+  const dsShort = datasetInfo?.name
+    ? datasetInfo.name.replace(/_/g, ' ').split(' ').map(w => w[0]?.toUpperCase()).join('')
+    : '...';
+
   return (
     <div className="app-container">
       {/* TOP NAV */}
       <div className="top-nav">
         <div className="nav-icon">&#9649;</div>
         <div className="nav-breadcrumb">
-          Mapping <span className="nav-separator">/</span> <span className="nav-active">Order to Cash</span>
+          Mapping <span className="nav-separator">/</span> <span className="nav-active">{dsName}</span>
         </div>
+        {datasetInfo && (
+          <div className="nav-dataset-badge">
+            {datasetInfo.tableCount} tables
+          </div>
+        )}
       </div>
 
       <div className="main-content">
@@ -371,6 +423,9 @@ function App() {
               )}
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'AGGREGATION' && (
                 <div style={{ color: '#4a6cf7' }}>Aggregation results shown in chat</div>
+              )}
+              {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'RAG_RESPONSE' && (
+                <div style={{ color: '#4a6cf7' }}>Knowledge base answer shown in chat</div>
               )}
               {resultInfo && !resultInfo.hasNodes && !resultInfo.reason && (
                 <div>No graph data available</div>
@@ -418,20 +473,20 @@ function App() {
         <div className="chat-panel">
           <div className="chat-header">
             <div className="chat-title">Chat with Graph</div>
-            <div className="chat-subtitle">Order to Cash</div>
+            <div className="chat-subtitle">{dsName}</div>
           </div>
 
           <div className="agent-identity">
-            <div className="agent-avatar">O2C</div>
+            <div className="agent-avatar">{dsShort}</div>
             <div className="agent-info">
               <div className="agent-name">Graph Agent</div>
-              <div className="agent-role">SAP O2C Analyst</div>
+              <div className="agent-role">{dsName} Analyst</div>
             </div>
           </div>
 
           <div className="chat-messages">
             <div className="chat-welcome">
-              Hi! I can help you analyze the <strong>Order to Cash</strong> process. Try asking things like:
+              Hi! I can help you analyze the <strong>{dsName}</strong> process. Try asking things like:
               <ul style={{ marginTop: 8, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4, fontSize: '12.5px', color: '#6b6b80' }}>
                 <li>Trace full flow for billing document 90504204</li>
                 <li>Top 5 customers by billing amount</li>
@@ -459,7 +514,7 @@ function App() {
                     {r.nlAnswer && (
                       <div className="chat-agent-msg">
                         <div className="chat-agent-header">
-                          <div className="agent-avatar-sm">O2C</div>
+                          <div className="agent-avatar-sm">{dsShort}</div>
                           <span className="agent-name-sm">Graph Agent</span>
                         </div>
                         <div className="chat-agent-bubble">{r.nlAnswer}</div>
@@ -542,6 +597,20 @@ function App() {
                     {r.rowCount > 0 && (
                       <div className="result-card">
                         <div className="result-card-title">Execution Details</div>
+                        {r.dataset && (
+                          <div className="result-row">
+                            <span className="result-label">Dataset</span>
+                            <span className="result-value">{r.dataset}</span>
+                          </div>
+                        )}
+                        {r.queryType && (
+                          <div className="result-row">
+                            <span className="result-label">Query Type</span>
+                            <span className="result-value">
+                              <span className={`query-type-badge badge-${r.queryType.toLowerCase()}`}>{r.queryType}</span>
+                            </span>
+                          </div>
+                        )}
                         <div className="result-row">
                           <span className="result-label">Query</span>
                           <span className="result-value">{r.query}</span>
@@ -609,4 +678,12 @@ function App() {
   );
 }
 
-export default App;
+function AppWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  );
+}
+
+export default AppWithBoundary;

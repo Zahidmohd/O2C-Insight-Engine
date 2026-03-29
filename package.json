@@ -1,25 +1,22 @@
 {
-  "name": "graph-based-data-modeling-and-query-system",
-  "version": "1.0.0",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
+  "name": "o2c-insight-engine",
+  "version": "1.1.0",
+  "description": "Natural language query system for SAP Order-to-Cash data with LLM-driven SQL and graph visualization",
+  "main": "src/server.js",
   "scripts": {
     "start": "node src/db/loader.js && node src/server.js",
     "build": "cd frontend && npm install && npm run build",
     "test": "node tests/smokeTest.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["sap", "o2c", "nlp", "sql", "graph"],
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "better-sqlite3": "^11.10.0",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "groq-sdk": "^1.1.1",
+    "helmet": "^8.1.0",
     "openai": "^6.32.0"
   }
 }

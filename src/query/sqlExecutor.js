@@ -2,14 +2,15 @@ const db = require('../db/connection');
 
 /**
  * Execute validated query string returning raw rows.
+ * Accepts optional params array for parameterized queries (prevents SQL injection).
  */
-async function executeQuery(sql) {
+async function executeQuery(sql, params = []) {
     try {
         const start = process.hrtime();
-        
+
         // Execute the query
         // db.allAsync was securely defined in connection.js
-        const rows = await db.allAsync(sql, []);
+        const rows = await db.allAsync(sql, params);
         
         const delta = process.hrtime(start);
         const execTimeMs = (delta[0] * 1000) + (delta[1] / 1000000);

@@ -1,18 +1,32 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const path = require('path');
 const queryRoutes = require('./routes/queryRoutes');
+const db = require('./db/connection');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
+// Trust first proxy (Render, nginx, etc.) so req.ip returns real client IP
+app.set('trust proxy', 1);
+
+// Security headers
+app.use(helmet({ contentSecurityPolicy: false }));
+
+// CORS — whitelist specific origins
+app.use(cors({
+    origin: process.env.ALLOWED_ORIGINS
+        ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
+        : ['http://localhost:3000', 'http://localhost:5173'],
+    methods: ['GET', 'POST'],
+}));
+
 app.use(express.json());
 
-// Serve frontend static files in production
+// Serve frontend static files with cache headers
 const frontendDist = path.join(__dirname, '../frontend/dist');
-app.use(express.static(frontendDist));
+app.use(express.static(frontendDist, { maxAge: '1d' }));
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -50,5 +64,22 @@ server.on('error', (err) => {
     }
     process.exit(1);
 });
+
+// Graceful shutdown — close HTTP server and database connection
+function shutdown(signal) {
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    server.close(() => {
+        db.close();
+        console.log('Server closed.');
+        process.exit(0);
+    });
+    setTimeout(() => {
+        console.error('Forced shutdown after timeout.');
+        process.exit(1);
+    }, 10000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 module.exports = app;

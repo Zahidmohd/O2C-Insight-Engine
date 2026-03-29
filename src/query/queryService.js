@@ -5,7 +5,7 @@ const { executeQuery } = require('./sqlExecutor');
 const { extractGraph } = require('./graphExtractor');
 const { classifyQuery } = require('./queryClassifier');
 const { retrieveContext } = require('../rag/knowledgeBase');
-const { domainKeywords, entities: entityKeywords } = require('../config/datasetConfig');
+const { getActiveConfig } = require('../config/activeDataset');
 
 /**
  * In-memory response cache — avoids burning LLM tokens on repeated identical queries.
@@ -14,13 +14,15 @@ const { domainKeywords, entities: entityKeywords } = require('../config/datasetC
  */
 const responseCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_CACHE_SIZE = 500;
 
 const STOPWORDS = new Set(['the', 'is', 'show', 'all', 'give', 'me', 'a', 'an', 'of', 'for', 'and', 'with', 'in', 'to', 'by']);
 
 /**
  * Normalizes a query string for cache key matching.
  * "Show all billing documents" and "show billing documents" hit the same key.
- * Steps: lowercase → strip punctuation → remove stopwords → sort words.
+ * Steps: lowercase → strip punctuation → collapse whitespace → remove stopwords.
+ * Word order is preserved to avoid false hits across different query intents.
  */
 function normalizeQuery(query) {
     return query
@@ -28,7 +30,6 @@ function normalizeQuery(query) {
         .replace(/[^a-z0-9\s]/g, '')
         .split(/\s+/)
         .filter(w => w && !STOPWORDS.has(w))
-        .sort()
         .join(' ');
 }
 
@@ -49,6 +50,10 @@ function getCached(query, includeSql) {
 
 function setCached(query, includeSql, response) {
     const key = cacheKey(query, includeSql);
+    if (responseCache.size >= MAX_CACHE_SIZE) {
+        const oldestKey = responseCache.keys().next().value;
+        responseCache.delete(oldestKey);
+    }
     responseCache.set(key, { response, timestamp: Date.now() });
 }
 
@@ -88,8 +93,8 @@ function isIntentValid(query) {
 function isDomainQuery(query) {
     const queryLower = query.toLowerCase();
 
-    // Domain keywords sourced from central config (datasetConfig.js)
-    const matchedKeywords = domainKeywords.filter(kw => queryLower.includes(kw));
+    // Domain keywords sourced from active dataset config
+    const matchedKeywords = getActiveConfig().domainKeywords.filter(kw => queryLower.includes(kw));
 
     if (matchedKeywords.length === 0) {
         return {
@@ -199,8 +204,8 @@ function buildExplanation(query, sql) {
     else if (/find|list|show|get/.test(lower)) intent = 'list';
     else if (/why|missing|without|not billed|not delivered/.test(lower)) intent = 'gap-analysis';
 
-    // Extract entities from the NL query text
-    const entitiesFromQuery = entityKeywords.filter(e => lower.includes(e.toLowerCase()));
+    // Extract entities from the NL query text (from active dataset config)
+    const entitiesFromQuery = (getActiveConfig().entities || []).filter(e => lower.includes(e.toLowerCase()));
 
     // Also infer entities from tables referenced in the generated SQL
     const sqlLower = (sql || '').toLowerCase();
@@ -307,6 +312,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         console.warn(`${tag} [VALIDATION] Domain check failed at classifier — no O2C keywords found.`);
         return {
             success: false,
+            dataset: getActiveConfig().name,
             error: { message: 'This system is designed to answer questions related to the SAP Order-to-Cash dataset only.', type: 'VALIDATION_ERROR' },
             query: naturalLanguageQuery
         };
@@ -320,6 +326,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             console.warn(`${tag} [VALIDATION] RAG domain check failed — off-topic query blocked.`);
             return {
                 success: false,
+                dataset: getActiveConfig().name,
                 error: { message: ragDomainCheck.message, type: 'VALIDATION_ERROR' },
                 query: naturalLanguageQuery
             };
@@ -328,6 +335,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         console.log(`${tag} [RESULT] RAG response dispatched (rowCount: 0).`);
         return {
             success: true,
+            dataset: getActiveConfig().name,
             queryType: 'RAG',
             reason: 'RAG_RESPONSE',
             nlAnswer: context || 'No specific context found for this topic in the O2C knowledge base.',
@@ -354,6 +362,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         console.warn(`${tag} [VALIDATION] Intent check failed — no recognized business action.`);
         return {
             success: false,
+            dataset: getActiveConfig().name,
             error: { message: intentCheck.message, type: 'VALIDATION_ERROR' },
             query: naturalLanguageQuery
         };
@@ -364,6 +373,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         console.warn(`${tag} [VALIDATION] Domain check failed — query outside O2C scope.`);
         return {
             success: false,
+            dataset: getActiveConfig().name,
             error: { message: domainCheck.message, type: 'VALIDATION_ERROR' },
             query: naturalLanguageQuery
         };
@@ -372,18 +382,51 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
     // 2. Build Prompt
     const prompt = buildPrompt(naturalLanguageQuery);
 
+    // 3. Generate SQL from LLM with timeout protection
+    let rawSql = null;
+    let llmFailed = false;
+
     try {
-        // 3. Generate SQL from LLM with timeout protection
-        const generatedSql = await withTimeout(getSqlFromLLM(prompt), 15000, 'LLM Generation');
-
-        // Ensure LIMIT 100 explicitly
-        let rawSql = enforceLimit(generatedSql);
-
+        const generatedSql = await withTimeout(getSqlFromLLM(prompt), 45000, 'LLM Generation');
+        rawSql = enforceLimit(generatedSql);
         console.log(`${tag} [SQL_GENERATED]\n${rawSql}`);
-
-        // 4. Validate output
-        validateSql(rawSql); // Throws Error if unsafe
+        validateSql(rawSql);
         console.log(`${tag} [VALIDATION] SQL passed safety checks.`);
+    } catch (llmErr) {
+        console.error(`${tag} [LLM_FALLBACK] LLM/validation failed: ${llmErr.message}`);
+        llmFailed = true;
+    }
+
+    if (llmFailed) {
+        const fallbackResponse = {
+            success: true,
+            dataset: getActiveConfig().name,
+            queryType: 'FALLBACK',
+            summary: 'Unable to process your query due to an AI service issue. Please try again shortly.',
+            reason: 'LLM_UNAVAILABLE',
+            message: 'The AI service is temporarily unavailable.',
+            rowCount: 0,
+            keyFields: [],
+            data: [],
+            graph: { nodes: [], edges: [] },
+            highlightNodes: [],
+            explanation: {
+                intent: 'unknown',
+                entities: [],
+                strategy: 'LLM failed, fallback response',
+                explanationText: 'Unable to process query due to AI service issue.'
+            },
+            confidence: 0.2,
+            confidenceLabel: 'Low',
+            confidenceReasons: ['LLM unavailable — both Groq and OpenRouter failed'],
+            queryPlan: 'FALLBACK',
+            nlAnswer: null
+        };
+        setCached(naturalLanguageQuery, options.includeSql, fallbackResponse);
+        return fallbackResponse;
+    }
+
+    try {
 
         // 4.5. Existence checks for referenced document IDs
         let explicitIdChecked = false;
@@ -404,7 +447,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 console.log(`${tag} [VALIDATION] Checking existence of ${check.label} '${extractedId}'...`);
                 
                 const checkResult = await withTimeout(
-                    executeQuery(`SELECT ${check.column} FROM ${check.table} WHERE ${check.column} = '${extractedId}' LIMIT 1`),
+                    executeQuery(`SELECT ${check.column} FROM ${check.table} WHERE ${check.column} = ? LIMIT 1`, [extractedId]),
                     2000, 'DB Existence Check'
                 );
                 
@@ -418,6 +461,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                     
                     return {
                         success: true,
+                        dataset: getActiveConfig().name,
+                        queryType,
                         summary: `${check.label} '${extractedId}' was not found in the dataset.`,
                         reason: 'INVALID_ID',
                         message: 'No records found for the given query.',
@@ -427,7 +472,12 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                         executionTimeMs: 0,
                         generatedSql: options.includeSql ? rawSql : undefined,
                         data: [],
-                        graph: { nodes: [], edges: [] }
+                        graph: { nodes: [], edges: [] },
+                        explanation: buildExplanation(naturalLanguageQuery, rawSql),
+                        confidence: 0.3,
+                        confidenceLabel: 'Low',
+                        confidenceReasons: ['Valid SQL generated', 'Referenced document ID not found in dataset'],
+                        queryPlan: 'LLM'
                     };
                 }
                 console.log(`${tag} [VALIDATION] ${check.label} '${extractedId}' exists.`);
@@ -444,7 +494,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             console.log(`${tag} [VALIDATION] Checking existence of customer '${extractedCustId}'...`);
 
             const custCheckResult = await withTimeout(
-                executeQuery(`SELECT salesOrder FROM sales_order_headers WHERE soldToParty = '${extractedCustId}' LIMIT 1`),
+                executeQuery(`SELECT salesOrder FROM sales_order_headers WHERE soldToParty = ? LIMIT 1`, [extractedCustId]),
                 2000, 'DB Customer Check'
             );
 
@@ -452,6 +502,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 console.log(`${tag} [VALIDATION] No records for customer '${extractedCustId}'.`);
                 return {
                     success: true,
+                    dataset: getActiveConfig().name,
+                    queryType,
                     summary: `No records found for customer '${extractedCustId}' in the dataset.`,
                     reason: 'INVALID_ID',
                     message: 'No records found for the given query.',
@@ -460,7 +512,12 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                     executionTimeMs: 0,
                     generatedSql: options.includeSql ? rawSql : undefined,
                     data: [],
-                    graph: { nodes: [], edges: [] }
+                    graph: { nodes: [], edges: [] },
+                    explanation: buildExplanation(naturalLanguageQuery, rawSql),
+                    confidence: 0.3,
+                    confidenceLabel: 'Low',
+                    confidenceReasons: ['Valid SQL generated', 'Referenced customer not found in dataset'],
+                    queryPlan: 'LLM'
                 };
             }
             console.log(`${tag} [VALIDATION] Customer '${extractedCustId}' exists.`);
@@ -471,10 +528,11 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
         if (!dbResult.success) {
              console.error(`${tag} [EXECUTION] DB error:`, dbResult.error);
-             return { 
-                 success: false, 
-                 error: { message: dbResult.error, type: 'DB_ERROR' }, 
-                 query: naturalLanguageQuery 
+             return {
+                 success: false,
+                 dataset: getActiveConfig().name,
+                 error: { message: dbResult.error, type: 'DB_ERROR' },
+                 query: naturalLanguageQuery
              };
         }
 
@@ -534,8 +592,15 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 emptySummary = `The query executed correctly, but no matching connected records were found.`;
             }
 
+            const zeroExplanation = buildExplanation(naturalLanguageQuery, rawSql);
+            const zeroConfidence = calculateConfidence({
+                queryType, fallbackApplied, rowCount: 0, isAggregation: false
+            });
+
             return {
                 success: true,
+                dataset: getActiveConfig().name,
+                queryType,
                 summary: emptySummary,
                 reason: 'NO_FLOW',
                 message: 'No records found for the given query.',
@@ -544,7 +609,12 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 executionTimeMs: Number(dbResult.executionTimeMs),
                 generatedSql: options.includeSql ? rawSql : undefined,
                 data: [],
-                graph: { nodes: [], edges: [] }
+                graph: { nodes: [], edges: [] },
+                explanation: zeroExplanation,
+                confidence: zeroConfidence.score,
+                confidenceLabel: zeroConfidence.label,
+                confidenceReasons: zeroConfidence.reasons,
+                queryPlan: fallbackApplied ? 'FALLBACK' : 'LLM'
             };
         }
 
@@ -561,7 +631,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         try {
             nlAnswer = await withTimeout(
                 generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount, ragContext),
-                20000,
+                45000,
                 'NL Answer Generation'
             );
             console.log(`${tag} [RESULT] NL answer generated.`);
@@ -673,6 +743,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         finalResponse.confidenceLabel = confidenceResult.label;
         finalResponse.confidenceReasons = confidenceResult.reasons;
         finalResponse.queryType = queryType; // "SQL" or "HYBRID"
+        finalResponse.dataset = getActiveConfig().name;
         finalResponse.queryPlan = fallbackApplied ? 'FALLBACK' : 'LLM';
 
         // Strip SQL from response unless caller explicitly requested it
@@ -693,11 +764,10 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
     } catch (e) {
          console.error(`${tag} [EXECUTION] Pipeline failure: ${e.message}`);
-         // Classify validation vs LLM errors simplistically based on thrown origin
-         const type = e.message.includes('Validation') ? 'VALIDATION_ERROR' : 'LLM_ERROR';
          return {
              success: false,
-             error: { message: e.message, type: type },
+             dataset: getActiveConfig().name,
+             error: { message: e.message, type: 'EXECUTION_ERROR' },
              query: naturalLanguageQuery
          };
     }
@@ -737,7 +807,16 @@ if (require.main === module) {
     });
 }
 
+/**
+ * Clears the response cache. Called on dataset switch to prevent stale results.
+ */
+function clearCache() {
+    responseCache.clear();
+    console.log('[CACHE] Response cache cleared.');
+}
+
 module.exports = {
     processQuery,
+    clearCache,
     isDomainQuery // Exported for unit testing
 };

@@ -2,48 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const db = require('./connection');
 const initDB = require('./init');
+const { getActiveConfig, defaultConfig } = require('../config/activeDataset');
 
 const BATCH_SIZE = 100;
-const DATA_DIR = path.resolve(__dirname, '../../sap-o2c-data');
 
-const TABLES = [
-  { name: 'plants', directory: 'plants', transforms: {} },
-  { name: 'business_partners', directory: 'business_partners', transforms: {} },
-  { name: 'products', directory: 'products', transforms: {} },
-  { name: 'business_partner_addresses', directory: 'business_partner_addresses', transforms: {} },
-  { name: 'customer_company_assignments', directory: 'customer_company_assignments', transforms: {} },
-  { name: 'customer_sales_area_assignments', directory: 'customer_sales_area_assignments', transforms: {} },
-  { name: 'product_descriptions', directory: 'product_descriptions', transforms: {} },
-  { name: 'product_plants', directory: 'product_plants', transforms: {} },
-  { name: 'product_storage_locations', directory: 'product_storage_locations', transforms: {} },
-  { name: 'sales_order_headers', directory: 'sales_order_headers', transforms: {} },
-  { 
-    name: 'sales_order_items', 
-    directory: 'sales_order_items', 
-    transforms: {
-      // ⚠️ CRITICAL: Pad to 6 digits to match delivery documents reference items
-      salesOrderItem: (val) => (typeof val === 'string' && val ? val.padStart(6, '0') : val)
-    } 
-  },
-  { name: 'sales_order_schedule_lines', directory: 'sales_order_schedule_lines', transforms: {} },
-  { name: 'outbound_delivery_headers', directory: 'outbound_delivery_headers', transforms: {} },
-  { name: 'outbound_delivery_items', directory: 'outbound_delivery_items', transforms: {} },
-  { name: 'billing_document_headers', directory: 'billing_document_headers', transforms: {} },
-  {
-    name: 'billing_document_items',
-    directory: 'billing_document_items',
-    transforms: {
-      // ⚠️ CRITICAL: Pad to 6 digits for clean joins
-      referenceSdDocumentItem: (val) => (typeof val === 'string' && val ? val.padStart(6, '0') : val)
-    }
-  },
-  { name: 'billing_document_cancellations', directory: 'billing_document_cancellations', transforms: {} },
-  { name: 'journal_entry_items_accounts_receivable', directory: 'journal_entry_items_accounts_receivable', transforms: {} },
-  { name: 'payments_accounts_receivable', directory: 'payments_accounts_receivable', transforms: {} }
-];
-
-async function loadTable(tableConfig) {
-  const dirPath = path.join(DATA_DIR, tableConfig.directory);
+async function loadTable(tableConfig, dataDir) {
+  const dirPath = path.join(dataDir, tableConfig.directory);
   if (!fs.existsSync(dirPath)) {
     console.warn(`Directory not found for table ${tableConfig.name}: ${dirPath}`);
     return 0;
@@ -131,13 +95,46 @@ async function executeBatch(queries, paramSets) {
   }
 }
 
+/**
+ * Loads data for a given dataset config.
+ * Called at runtime for dataset switching, or at startup via main().
+ *
+ * @param {object} config - Dataset config object (must have tables + dataDir)
+ * @returns {number} Total rows inserted
+ */
+async function loadDataset(config) {
+  const dataDir = config.dataDir
+    ? path.resolve(__dirname, config.dataDir)
+    : path.resolve(__dirname, '../../sap-o2c-data');
+
+  const tables = config.tables.map(t => {
+    // Uploaded configs arrive as JSON (no functions). If a table matches a
+    // default config table, inherit its transforms so padding etc. is preserved.
+    let transforms = t.transforms || {};
+    if (Object.keys(transforms).length === 0) {
+      const defaultTable = defaultConfig.tables.find(dt => dt.name === t.name);
+      if (defaultTable?.transforms) transforms = defaultTable.transforms;
+    }
+    return { name: t.name, directory: t.directory || t.name, transforms };
+  });
+
+  let totalRows = 0;
+  for (const table of tables) {
+    const inserted = await loadTable(table, dataDir);
+    totalRows += inserted;
+  }
+
+  console.log(`\n🎉 Data loading complete. Total rows inserted: ${totalRows}`);
+  return totalRows;
+}
+
 async function runValidationQueries() {
   console.log('\n--- Post-Load Validation ---');
 
   // Check padding
   const paddingCheck = await db.allAsync(`
-    SELECT COUNT(*) as unpaddedCount 
-    FROM billing_document_items 
+    SELECT COUNT(*) as unpaddedCount
+    FROM billing_document_items
     WHERE LENGTH(referenceSdDocumentItem) < 6
   `);
   if (paddingCheck[0].unpaddedCount === 0) {
@@ -164,14 +161,9 @@ async function runValidationQueries() {
 
 async function main() {
   await initDB();
-  
-  let totalRows = 0;
-  for (const table of TABLES) {
-    const inserted = await loadTable(table);
-    totalRows += inserted;
-  }
 
-  console.log(`\n🎉 Data loading complete. Total rows inserted: ${totalRows}`);
+  const config = getActiveConfig();
+  await loadDataset(config);
 
   await runValidationQueries();
 
@@ -185,4 +177,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { loadTable };
+module.exports = { loadTable, loadDataset };
