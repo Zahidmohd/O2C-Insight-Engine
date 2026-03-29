@@ -15,8 +15,25 @@ const { domainKeywords, entities: entityKeywords } = require('../config/datasetC
 const responseCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+const STOPWORDS = new Set(['the', 'is', 'show', 'all', 'give', 'me', 'a', 'an', 'of', 'for', 'and', 'with', 'in', 'to', 'by']);
+
+/**
+ * Normalizes a query string for cache key matching.
+ * "Show all billing documents" and "show billing documents" hit the same key.
+ * Steps: lowercase → strip punctuation → remove stopwords → sort words.
+ */
+function normalizeQuery(query) {
+    return query
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .split(/\s+/)
+        .filter(w => w && !STOPWORDS.has(w))
+        .sort()
+        .join(' ');
+}
+
 function cacheKey(query, includeSql) {
-    return query.toLowerCase().trim() + (includeSql ? ':sql' : '');
+    return normalizeQuery(query) + (includeSql ? ':sql' : '');
 }
 
 function getCached(query, includeSql) {
@@ -209,46 +226,98 @@ function buildExplanation(query, sql) {
     else if (intent === 'gap-analysis') strategy = 'gap detection using LEFT JOIN with NULL check';
     else if (sql && /JOIN/i.test(sql)) strategy = 'multi-table join query';
 
-    return { intent, entities, strategy };
+    // Build a plain-English explanation of what the system did
+    const entityLabel = entities.length > 0 ? entities.join(', ') : 'O2C data';
+    const intentTexts = {
+        'trace':        `traced the full document flow across ${entityLabel} records`,
+        'aggregation':  `computed aggregated totals for ${entityLabel}`,
+        'list':         `retrieved a list of matching ${entityLabel} records`,
+        'gap-analysis': `checked for missing or incomplete links in the ${entityLabel} flow`,
+        'lookup':       `looked up ${entityLabel} records matching your filters`,
+    };
+    const explanationText = `The system identified this as a ${intent} query and ${intentTexts[intent]}.`;
+
+    return { intent, entities, strategy, explanationText };
 }
 
 /**
- * Produces a reliability score (0.0–1.0) for the response.
+ * Produces a reliability score (0.0–1.0), a human-readable label, and
+ * an array of reasons explaining the score.
  * RAG responses are always 1.0 (direct KB lookup, no SQL uncertainty).
  * SQL/HYBRID scores are reduced by fallback usage, zero rows, or aggregation uncertainty.
  */
 function calculateConfidence({ queryType, fallbackApplied, rowCount, isAggregation }) {
-    if (queryType === 'RAG') return 1.0;
+    const reasons = [];
+
+    if (queryType === 'RAG') {
+        return { score: 1.0, label: 'High', reasons: ['Direct knowledge base lookup'] };
+    }
+
     let score = 1.0;
-    if (fallbackApplied) score -= 0.2;
-    if (rowCount === 0) score -= 0.4;
-    if (isAggregation) score -= 0.1;
-    return Math.max(0, Math.min(1, parseFloat(score.toFixed(2))));
+    reasons.push('Valid SQL generated');
+
+    if (fallbackApplied) {
+        score -= 0.2;
+        reasons.push('Fallback JOIN relaxation was used');
+    } else {
+        reasons.push('No fallback used');
+    }
+
+    if (rowCount === 0) {
+        score -= 0.4;
+        reasons.push('Query returned zero rows');
+    } else {
+        reasons.push(`Non-empty results (${rowCount} rows)`);
+    }
+
+    if (isAggregation) {
+        score -= 0.1;
+        reasons.push('Aggregation query — edge-case rounding possible');
+    }
+
+    score = Math.max(0, Math.min(1, parseFloat(score.toFixed(2))));
+
+    let label = 'High';
+    if (score < 0.4) label = 'Low';
+    else if (score <= 0.75) label = 'Medium';
+
+    return { score, label, reasons };
 }
 
 /**
  * Orchestrates the full Natural Language -> SQL -> Result pipeline
  */
 async function processQuery(naturalLanguageQuery, requestId = 'dev-local', options = {}) {
-    console.log(`\n[API-${requestId}] Query Service Evaluation: "${naturalLanguageQuery}"`);
+    const tag = `[API-${requestId}]`;
+    console.log(`\n${tag} [USER_QUERY] "${naturalLanguageQuery}"`);
 
     // 0a. Cache check — skip LLM entirely for repeated identical queries
     const cached = getCached(naturalLanguageQuery, options.includeSql);
     if (cached) {
-        console.log(`[API-${requestId}] Cache hit — returning cached response.`);
+        console.log(`${tag} [CACHE_HIT] Returning cached response.`);
         return cached;
     }
 
     // 0b. Classify query type — HYBRID checked before RAG to avoid misrouting
     const queryType = classifyQuery(naturalLanguageQuery);
-    console.log(`[API-${requestId}] Query classified as: ${queryType}`);
+    console.log(`${tag} [QUERY_TYPE] ${queryType}`);
+
+    // INVALID path: query has no O2C domain relevance
+    if (queryType === 'INVALID') {
+        console.warn(`${tag} [VALIDATION] Domain check failed at classifier — no O2C keywords found.`);
+        return {
+            success: false,
+            error: { message: 'This system is designed to answer questions related to the SAP Order-to-Cash dataset only.', type: 'VALIDATION_ERROR' },
+            query: naturalLanguageQuery
+        };
+    }
 
     // RAG path: explanation-only, no SQL execution needed
     if (queryType === 'RAG') {
         // Guard: reject off-topic RAG queries that contain no O2C domain keywords
         const ragDomainCheck = isDomainQuery(naturalLanguageQuery);
         if (!ragDomainCheck.valid) {
-            console.warn(`[API-${requestId}] RAG Domain Check Failed: Off-topic query blocked.`);
+            console.warn(`${tag} [VALIDATION] RAG domain check failed — off-topic query blocked.`);
             return {
                 success: false,
                 error: { message: ragDomainCheck.message, type: 'VALIDATION_ERROR' },
@@ -256,7 +325,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             };
         }
         const context = retrieveContext(naturalLanguageQuery);
-        console.log(`[API-${requestId}] RAG response dispatched.`);
+        console.log(`${tag} [RESULT] RAG response dispatched (rowCount: 0).`);
         return {
             success: true,
             queryType: 'RAG',
@@ -268,6 +337,9 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             highlightNodes: [],
             summary: 'Explanation retrieved from knowledge base.',
             confidence: 1.0,
+            confidenceLabel: 'High',
+            confidenceReasons: ['Direct knowledge base lookup'],
+            queryPlan: 'RULE_BASED',
             explanation: {
                 intent: 'concept explanation',
                 entities: [],
@@ -279,7 +351,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
     // 1. Guardrails
     const intentCheck = isIntentValid(naturalLanguageQuery);
     if (!intentCheck.valid) {
-        console.warn(`[API-${requestId}] Intent Check Failed: Missing Business Action`);
+        console.warn(`${tag} [VALIDATION] Intent check failed — no recognized business action.`);
         return {
             success: false,
             error: { message: intentCheck.message, type: 'VALIDATION_ERROR' },
@@ -289,7 +361,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
     const domainCheck = isDomainQuery(naturalLanguageQuery);
     if (!domainCheck.valid) {
-        console.warn(`[API-${requestId}] Domain Check Failed / Guardrail Prevented Engine Spawn`);
+        console.warn(`${tag} [VALIDATION] Domain check failed — query outside O2C scope.`);
         return {
             success: false,
             error: { message: domainCheck.message, type: 'VALIDATION_ERROR' },
@@ -303,14 +375,15 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
     try {
         // 3. Generate SQL from LLM with timeout protection
         const generatedSql = await withTimeout(getSqlFromLLM(prompt), 15000, 'LLM Generation');
-        
+
         // Ensure LIMIT 100 explicitly
         let rawSql = enforceLimit(generatedSql);
-        
-        console.log(`[API-${requestId}] Engine Generated SQL:\n${rawSql}\n`);
+
+        console.log(`${tag} [SQL_GENERATED]\n${rawSql}`);
 
         // 4. Validate output
         validateSql(rawSql); // Throws Error if unsafe
+        console.log(`${tag} [VALIDATION] SQL passed safety checks.`);
 
         // 4.5. Existence checks for referenced document IDs
         let explicitIdChecked = false;
@@ -328,7 +401,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             if (match && match[1]) {
                 const extractedId = match[1];
                 explicitIdChecked = true;
-                console.log(`[API-${requestId}] Check: Testing existence of ${check.label} '${extractedId}'...`);
+                console.log(`${tag} [VALIDATION] Checking existence of ${check.label} '${extractedId}'...`);
                 
                 const checkResult = await withTimeout(
                     executeQuery(`SELECT ${check.column} FROM ${check.table} WHERE ${check.column} = '${extractedId}' LIMIT 1`),
@@ -336,7 +409,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 );
                 
                 if (checkResult.success && checkResult.rowCount === 0) {
-                    console.log(`[API-${requestId}] Check: Invalid ${check.label} ID: ${extractedId}`);
+                    console.log(`${tag} [VALIDATION] Invalid ${check.label} ID: ${extractedId}`);
                     const sampleResult = await withTimeout(
                         executeQuery(`SELECT ${check.column} FROM ${check.table} ORDER BY RANDOM() LIMIT 5`),
                         2000, 'DB Samples Fetch'
@@ -357,7 +430,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                         graph: { nodes: [], edges: [] }
                     };
                 }
-                console.log(`[API-${requestId}] Check: ${check.label} '${extractedId}' exists. Proceeding.`);
+                console.log(`${tag} [VALIDATION] ${check.label} '${extractedId}' exists.`);
                 break; // Only check the first matched ID type
             }
         }
@@ -368,7 +441,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         if (custMatch && custMatch[1]) {
             extractedCustId = custMatch[1];
             explicitCustChecked = true;
-            console.log(`[API-${requestId}] Check: Testing existence of customer '${extractedCustId}'...`);
+            console.log(`${tag} [VALIDATION] Checking existence of customer '${extractedCustId}'...`);
 
             const custCheckResult = await withTimeout(
                 executeQuery(`SELECT salesOrder FROM sales_order_headers WHERE soldToParty = '${extractedCustId}' LIMIT 1`),
@@ -376,7 +449,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             );
 
             if (custCheckResult.success && custCheckResult.rowCount === 0) {
-                console.log(`[API-${requestId}] Check: No records for customer '${extractedCustId}'.`);
+                console.log(`${tag} [VALIDATION] No records for customer '${extractedCustId}'.`);
                 return {
                     success: true,
                     summary: `No records found for customer '${extractedCustId}' in the dataset.`,
@@ -390,14 +463,14 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                     graph: { nodes: [], edges: [] }
                 };
             }
-            console.log(`[API-${requestId}] Check: Customer '${extractedCustId}' exists. Proceeding.`);
+            console.log(`${tag} [VALIDATION] Customer '${extractedCustId}' exists.`);
         }
 
         // 5. Execute against SQLite with execution timeout
         let dbResult = await withTimeout(executeQuery(rawSql), 5000, 'Database Execution');
 
         if (!dbResult.success) {
-             console.error(`[API-${requestId}] execution evaluation Error boundary trigger:`, dbResult.error);
+             console.error(`${tag} [EXECUTION] DB error:`, dbResult.error);
              return { 
                  success: false, 
                  error: { message: dbResult.error, type: 'DB_ERROR' }, 
@@ -414,11 +487,11 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             const hasAggregations = upSql.includes('GROUP BY') || upSql.includes('COUNT(') || upSql.includes('SUM(');
 
             if (!hasFlowTables) {
-                console.log(`[API-${requestId}] Check: Fallback skipped (non-flow query)`);
+                console.log(`${tag} [FALLBACK_USED] Skipped — non-flow query.`);
             } else if (hasAggregations) {
-                console.log(`[API-${requestId}] Check: Fallback skipped (aggregation query)`);
+                console.log(`${tag} [FALLBACK_USED] Skipped — aggregation query.`);
             } else if (rawSql.match(/\bJOIN\b/gi)) {
-                console.log(`[API-${requestId}] Check: Zero rows returned. Fallback triggered (Targeted LEFT JOIN)...`);
+                console.log(`${tag} [FALLBACK_USED] Zero rows — triggering LEFT JOIN relaxation...`);
                 
                 let relaxedSql = rawSql;
                 // Target explicitly safe mapping pipelines natively
@@ -439,7 +512,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
                 const relaxedDbResult = await withTimeout(executeQuery(relaxedSql), 5000, 'Database Execution Fallback');
                 if (relaxedDbResult.success && relaxedDbResult.rowCount > 0) {
-                    console.log(`[API-${requestId}] Check: Fallback successful! Fetched ${relaxedDbResult.rowCount} rows via relaxed boundary graphs.`);
+                    console.log(`${tag} [FALLBACK_USED] Success — ${relaxedDbResult.rowCount} rows recovered via relaxed joins.`);
                     dbResult = relaxedDbResult;
                     rawSql = relaxedSql;
                     fallbackApplied = true;
@@ -447,11 +520,11 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             }
         }
 
-        console.log(`[API-${requestId}] Success bounds: ${dbResult.rowCount} payload fetched in ${dbResult.executionTimeMs}ms`);
+        console.log(`${tag} [EXECUTION] ${dbResult.rowCount} rows fetched in ${dbResult.executionTimeMs}ms`);
 
         // Clarify zero rows explicitly (if it STILL is 0 after fallback)
         if (dbResult.rowCount === 0) {
-            console.log(`[API-${requestId}] Check: Zero rows returned after fallback routines.`);
+            console.log(`${tag} [RESULT] Zero rows after all fallback attempts.`);
             let emptySummary;
             if (explicitCustChecked) {
                 emptySummary = `No records found for customer '${extractedCustId}' in the dataset.`;
@@ -480,7 +553,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         let ragContext = null;
         if (queryType === 'HYBRID') {
             ragContext = retrieveContext(naturalLanguageQuery);
-            console.log(`[API-${requestId}] HYBRID: KB context ${ragContext ? 'found' : 'not found — proceeding with SQL answer only'}.`);
+            console.log(`${tag} [QUERY_TYPE] HYBRID — KB context ${ragContext ? 'found' : 'not found, proceeding with SQL only'}.`);
         }
 
         // 5.6. Generate Natural Language Answer from results
@@ -491,9 +564,9 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 20000,
                 'NL Answer Generation'
             );
-            console.log(`[API-${requestId}] NL Answer: ${nlAnswer}`);
+            console.log(`${tag} [RESULT] NL answer generated.`);
         } catch (nlErr) {
-            console.warn(`[API-${requestId}] NL answer generation failed:`, nlErr.message);
+            console.warn(`${tag} [RESULT] NL answer generation failed: ${nlErr.message}`);
         }
 
         // 5.7. Detect Aggregation Queries (CRITICAL UI CONTROL)
@@ -509,7 +582,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         let finalResponse;
 
         if (isAggregation) {
-            console.log(`[API-${requestId}] Check: Aggregation query detected. Showing summarized nodes.`);
+            console.log(`${tag} [INTERPRETATION] Aggregation query detected — summarized nodes.`);
             
             // Build simple nodes without relationships
             const aggNodes = dbResult.rows.map((row, i) => {
@@ -590,26 +663,28 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
         // 7. Attach explanation, confidence, queryType to all SQL/HYBRID responses
         finalResponse.explanation = buildExplanation(naturalLanguageQuery, rawSql);
-        finalResponse.confidence = calculateConfidence({
+        const confidenceResult = calculateConfidence({
             queryType,
             fallbackApplied: finalResponse.fallbackApplied || false,
             rowCount: finalResponse.rowCount || 0,
             isAggregation: finalResponse.reason === 'AGGREGATION',
         });
+        finalResponse.confidence = confidenceResult.score;
+        finalResponse.confidenceLabel = confidenceResult.label;
+        finalResponse.confidenceReasons = confidenceResult.reasons;
         finalResponse.queryType = queryType; // "SQL" or "HYBRID"
+        finalResponse.queryPlan = fallbackApplied ? 'FALLBACK' : 'LLM';
 
         // Strip SQL from response unless caller explicitly requested it
         if (!options.includeSql) {
             delete finalResponse.generatedSql;
         }
 
-        // Required Final Logging Check
-        console.log(`[API-${requestId}] Request completed.`);
-        console.log(`- Query: ${naturalLanguageQuery}`);
-        console.log(`- SQL: ${rawSql.replace(/\n/g, ' ')}`);
-        console.log(`- Execution Time: ${finalResponse.executionTimeMs} ms`);
-        console.log(`- Row Count: ${finalResponse.rowCount}`);
-        console.log(`- Confidence: ${finalResponse.confidence}`);
+        // Structured interpretation log
+        console.log(`${tag} [INTERPRETATION] intent=${finalResponse.explanation.intent} | entities=${finalResponse.explanation.entities.join(', ') || 'none'} | strategy=${finalResponse.explanation.strategy}`);
+
+        // Final result summary
+        console.log(`${tag} [RESULT] rowCount=${finalResponse.rowCount} | confidence=${finalResponse.confidence} | execTime=${finalResponse.executionTimeMs}ms${fallbackApplied ? ' | fallback=true' : ''}`);
 
         // Cache successful responses only
         if (finalResponse.success) setCached(naturalLanguageQuery, options.includeSql, finalResponse);
@@ -617,7 +692,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         return finalResponse;
 
     } catch (e) {
-         console.error(`[API-${requestId}] Pipeline Failure caught:`, e.message);
+         console.error(`${tag} [EXECUTION] Pipeline failure: ${e.message}`);
          // Classify validation vs LLM errors simplistically based on thrown origin
          const type = e.message.includes('Validation') ? 'VALIDATION_ERROR' : 'LLM_ERROR';
          return {

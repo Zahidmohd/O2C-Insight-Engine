@@ -14,11 +14,15 @@ async function executeQuery(sql) {
         const delta = process.hrtime(start);
         const execTimeMs = (delta[0] * 1000) + (delta[1] / 1000000);
 
+        const MAX_ROWS = 1000;
+        const truncated = rows.length > MAX_ROWS;
+
         return {
             success: true,
             executionTimeMs: execTimeMs.toFixed(2),
             rowCount: rows.length,
-            rows: rows
+            rows: truncated ? rows.slice(0, MAX_ROWS) : rows,
+            truncated
         };
     } catch (error) {
         console.error('SQL Execution Error:', error.message);

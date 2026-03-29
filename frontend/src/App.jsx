@@ -260,7 +260,7 @@ function App() {
     try {
       const API_BASE = import.meta.env.VITE_API_URL || '';
       const response = await axios.post(`${API_BASE}/api/query`, { query, includeSql: showSql });
-      const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, message } = response.data;
+      const { success, requestId, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, queryPlan, truncated, message } = response.data;
 
       if (success) {
         const info = {
@@ -276,6 +276,10 @@ function App() {
           sql: sql || null,
           explanation: explanation || null,
           confidence: confidence ?? null,
+          confidenceLabel: confidenceLabel || null,
+          confidenceReasons: confidenceReasons || [],
+          queryPlan: queryPlan || null,
+          truncated: truncated || false,
           message: message || null
         };
         setResultInfo(info);
@@ -484,12 +488,32 @@ function App() {
                     )}
                     {/* Confidence score */}
                     {r.confidence != null && (
-                      <div className="confidence-text">Confidence: {Math.round(r.confidence * 100)}%</div>
+                      <div className="confidence-text">
+                        <div>Confidence: {Math.round(r.confidence * 100)}%{r.confidenceLabel && ` (${r.confidenceLabel})`}</div>
+                        {r.confidenceReasons && r.confidenceReasons.length > 0 && (
+                          <div className="confidence-reasons">
+                            {r.confidenceReasons.map((reason, i) => (
+                              <span key={i}>&#8226; {reason}{i < r.confidenceReasons.length - 1 ? ' ' : ''}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* Query execution plan */}
+                    {r.queryPlan && (
+                      <div className="confidence-text">Plan: {r.queryPlan}</div>
+                    )}
+                    {/* Truncation warning */}
+                    {r.truncated && (
+                      <div className="chat-info">Showing first 1000 results (truncated)</div>
                     )}
                     {/* Explanation — how the query was answered */}
                     {r.explanation && (
                       <div className="result-card">
                         <div className="result-card-title">How this was answered</div>
+                        {r.explanation.explanationText && (
+                          <div className="explanation-summary">{r.explanation.explanationText}</div>
+                        )}
                         <div className="result-row">
                           <span className="result-label">Intent</span>
                           <span className="result-value">{r.explanation.intent}</span>

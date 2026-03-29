@@ -1,11 +1,14 @@
 /**
  * Keyword-based query classifier.
- * Returns "SQL" | "RAG" | "HYBRID" based on query intent signals.
+ * Returns "SQL" | "RAG" | "HYBRID" | "INVALID" based on query intent signals.
  *
- * IMPORTANT: HYBRID is checked BEFORE RAG to prevent misclassification.
+ * IMPORTANT: Domain check runs FIRST — off-topic queries are rejected before
+ * any intent classification. HYBRID is checked BEFORE RAG to prevent misclassification.
  * Example: "Explain why order is not billed" contains both "explain" (RAG signal)
  * and "why" (HYBRID signal) — must route to HYBRID so SQL still executes.
  */
+
+const { domainKeywords } = require('../config/datasetConfig');
 
 const HYBRID_KEYWORDS = [
     'why', 'reason', 'context', 'background', 'tell me about'
@@ -18,6 +21,9 @@ const RAG_KEYWORDS = [
 
 function classifyQuery(query) {
     const lower = query.toLowerCase();
+
+    // Domain gate — reject queries with no O2C relevance
+    if (!domainKeywords.some(kw => lower.includes(kw))) return 'INVALID';
 
     // HYBRID first — these queries need both SQL data AND business context
     if (HYBRID_KEYWORDS.some(kw => lower.includes(kw))) return 'HYBRID';

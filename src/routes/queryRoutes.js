@@ -3,7 +3,36 @@ const crypto = require('crypto');
 const router = express.Router();
 const queryService = require('../query/queryService');
 
-router.post('/query', async (req, res) => {
+/**
+ * In-memory rate limiter — 20 requests per minute per IP.
+ * Entries auto-reset after the 1-minute window expires.
+ */
+const rateLimitMap = new Map();
+const RATE_LIMIT_MAX = 20;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+
+function rateLimit(req, res, next) {
+    const ip = req.ip || req.connection.remoteAddress;
+    const now = Date.now();
+    const entry = rateLimitMap.get(ip);
+
+    if (!entry || now - entry.timestamp > RATE_LIMIT_WINDOW_MS) {
+        rateLimitMap.set(ip, { count: 1, timestamp: now });
+        return next();
+    }
+
+    entry.count++;
+    if (entry.count > RATE_LIMIT_MAX) {
+        return res.status(429).json({
+            success: false,
+            error: 'Rate limit exceeded. Try again later.'
+        });
+    }
+
+    return next();
+}
+
+router.post('/query', rateLimit, async (req, res) => {
     // 1. Generate unique request ID for tracing
     const requestId = crypto.randomUUID();
     
@@ -68,8 +97,12 @@ router.post('/query', async (req, res) => {
             summary: result.summary,
             nlAnswer: result.nlAnswer || null,
             queryType: result.queryType,                       // "SQL" | "HYBRID" | "RAG"
-            explanation: result.explanation || null,           // { intent, entities, strategy }
-            confidence: result.confidence ?? null              // 0.0–1.0 reliability score
+            explanation: result.explanation || null,           // { intent, entities, strategy, explanationText }
+            confidence: result.confidence ?? null,             // 0.0–1.0 reliability score
+            confidenceLabel: result.confidenceLabel || null,   // "High" | "Medium" | "Low"
+            confidenceReasons: result.confidenceReasons || [], // Human-readable score reasons
+            queryPlan: result.queryPlan || null,               // "RULE_BASED" | "LLM" | "FALLBACK"
+            truncated: result.truncated || false               // true if rows were capped at 1000
         });
 
     } catch (e) {
