@@ -44,7 +44,7 @@ function validateSql(sql) {
     }
 
     // Reject computationally dangerous nested Subqueries inside execution JOINS preserving explicit indexing flows
-    if (/\bJOIN\b[^\n]*\(\s*SELECT/i.test(stripped)) {
+    if (/\bJOIN\b[\s\S]*?\(\s*SELECT/i.test(stripped)) {
         throw new Error('Execution rejected: Subqueries inside JOIN conditions break multi-hop query graphs. Please use explicit direct table joins.');
     }
 

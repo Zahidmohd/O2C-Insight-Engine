@@ -104,7 +104,12 @@ function validateRelSide(ref, tableColumnMap, rel) {
 function validateDataFiles(config, resolvedDataDir) {
     for (const t of config.tables) {
         const dir = t.directory || t.name;
-        const dirPath = path.join(resolvedDataDir, dir);
+        const dirPath = path.resolve(resolvedDataDir, dir);
+
+        // Block path traversal — directory must stay within the data root
+        if (!dirPath.startsWith(resolvedDataDir)) {
+            throw new Error(`Invalid schema: directory "${dir}" for table "${t.name}" escapes the data directory.`);
+        }
 
         if (!fs.existsSync(dirPath)) {
             throw new Error(`Invalid schema: data directory "${dir}" not found for table "${t.name}".`);

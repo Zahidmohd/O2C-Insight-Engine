@@ -7,7 +7,12 @@ const { getActiveConfig, defaultConfig } = require('../config/activeDataset');
 const BATCH_SIZE = 100;
 
 async function loadTable(tableConfig, dataDir) {
-  const dirPath = path.join(dataDir, tableConfig.directory);
+  const dirPath = path.resolve(dataDir, tableConfig.directory);
+  // Prevent path traversal — resolved path must stay within the data directory
+  if (!dirPath.startsWith(dataDir)) {
+    console.error(`Path traversal blocked for table ${tableConfig.name}: ${dirPath}`);
+    return 0;
+  }
   if (!fs.existsSync(dirPath)) {
     console.warn(`Directory not found for table ${tableConfig.name}: ${dirPath}`);
     return 0;
@@ -57,7 +62,8 @@ async function loadTable(tableConfig, dataDir) {
         });
 
         const placeholders = keys.map(() => '?').join(', ');
-        const sql = `INSERT OR IGNORE INTO ${tableConfig.name} (${keys.join(', ')}) VALUES (${placeholders})`;
+        const quotedKeys = keys.map(k => `"${k}"`).join(', ');
+        const sql = `INSERT OR IGNORE INTO "${tableConfig.name}" (${quotedKeys}) VALUES (${placeholders})`;
 
         batch.push(sql);
         batchParams.push(values);

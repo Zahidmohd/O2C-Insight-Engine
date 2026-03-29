@@ -9,11 +9,11 @@ const { getActiveConfig } = require('../config/activeDataset');
  */
 function generateSchemaFromConfig(config) {
     const statements = config.tables.map(t => {
-        const colDefs = t.columns.map(c => `    ${c} TEXT`).join(',\n');
+        const colDefs = t.columns.map(c => `    "${c}" TEXT`).join(',\n');
         const pkClause = t.primaryKey && t.primaryKey.length > 0
-            ? `,\n    PRIMARY KEY (${t.primaryKey.join(', ')})`
+            ? `,\n    PRIMARY KEY (${t.primaryKey.map(k => `"${k}"`).join(', ')})`
             : '';
-        return `CREATE TABLE IF NOT EXISTS ${t.name} (\n${colDefs}${pkClause}\n);`;
+        return `CREATE TABLE IF NOT EXISTS "${t.name}" (\n${colDefs}${pkClause}\n);`;
     });
     return statements.join('\n\n');
 }
