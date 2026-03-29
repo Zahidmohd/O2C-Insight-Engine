@@ -34,7 +34,9 @@ function normalizeQuery(query) {
 }
 
 function cacheKey(query, includeSql) {
-    return normalizeQuery(query) + (includeSql ? ':sql' : '');
+    const config = getActiveConfig();
+    const dsKey = `${config.name}:${config.version || 'default'}`;
+    return `${dsKey}:${normalizeQuery(query)}${includeSql ? ':sql' : ''}`;
 }
 
 function getCached(query, includeSql) {
@@ -185,7 +187,8 @@ function formatResponse(result, rawSql) {
         executionTimeMs: Number(result.executionTimeMs),
         generatedSql: rawSql,
         data: finalRows, // actual sliced data bounded effectively
-        graph: graphData,
+        graph: { nodes: graphData.nodes, edges: graphData.edges },
+        graphTruncated: graphData.graphTruncated || false,
         highlightNodes: highlightNodes
     };
 }
@@ -542,12 +545,15 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         if (dbResult.rowCount === 0) {
             const upSql = rawSql.toUpperCase();
             const hasFlowTables = upSql.includes('SALES_ORDER') || upSql.includes('OUTBOUND_DELIVERY') || upSql.includes('BILLING_DOCUMENT');
-            const hasAggregations = upSql.includes('GROUP BY') || upSql.includes('COUNT(') || upSql.includes('SUM(');
+            const hasAggregations = upSql.includes('GROUP BY') || /\b(COUNT|SUM|AVG|MIN|MAX)\s*\(/i.test(rawSql);
+            const isGapQuery = /IS\s+NULL/i.test(rawSql);
 
             if (!hasFlowTables) {
                 console.log(`${tag} [FALLBACK_USED] Skipped — non-flow query.`);
             } else if (hasAggregations) {
                 console.log(`${tag} [FALLBACK_USED] Skipped — aggregation query.`);
+            } else if (isGapQuery) {
+                console.log(`${tag} [FALLBACK_USED] Skipped — gap analysis query (IS NULL).`);
             } else if (rawSql.match(/\bJOIN\b/gi)) {
                 console.log(`${tag} [FALLBACK_USED] Zero rows — triggering LEFT JOIN relaxation...`);
                 
@@ -640,14 +646,10 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         }
 
         // 5.7. Detect Aggregation Queries (CRITICAL UI CONTROL)
-        const upperSql = rawSql.toUpperCase();
-        const isAggregation = upperSql.includes('COUNT(') || 
-                              upperSql.includes('SUM(') || 
-                              upperSql.includes('AVG(') || 
-                              upperSql.includes('MIN(') || 
-                              upperSql.includes('MAX(') || 
-                              upperSql.includes('GROUP BY') ||
-                              upperSql.includes('HAVING');
+        // Use regex to handle optional spaces before parens: COUNT(...), COUNT (...), etc.
+        const isAggregation = /\b(COUNT|SUM|AVG|MIN|MAX)\s*\(/i.test(rawSql) ||
+                              /\bGROUP\s+BY\b/i.test(rawSql) ||
+                              /\bHAVING\b/i.test(rawSql);
         
         let finalResponse;
 

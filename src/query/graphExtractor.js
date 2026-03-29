@@ -1,92 +1,73 @@
 /**
  * Extracts nodes and edges dynamically from raw SQL result sets.
  * Maps relational column data into Graph representations for Cytoscape.js.
+ *
+ * Limits: MAX_NODES caps graph size for UI stability.
+ * Dedup:  Nodes are only created once per ID (first occurrence wins).
  */
+
+const MAX_NODES = 200;
 
 function extractGraph(rows) {
     const nodeMap = new Map();
     const edgeMap = new Map(); // Use Map to prevent exact duplicate edges
+    let nodeLimitReached = false;
+
+    // Helper: only treat non-null, non-empty strings as valid field values
+    function valid(val) {
+        return val !== null && val !== undefined && val !== '';
+    }
+
+    // Helper: add a node only if it doesn't already exist AND we haven't hit the limit
+    function addNode(id, type, label, row) {
+        if (nodeMap.has(id)) return; // dedup — first occurrence wins
+        if (nodeMap.size >= MAX_NODES) {
+            nodeLimitReached = true;
+            return;
+        }
+        nodeMap.set(id, { id, type, label, properties: row });
+    }
 
     // Iterate over each raw data row returned by SQLite
-    rows.forEach(row => {
-        // --- NODE EXTRACTION ---
+    for (const row of rows) {
+        // --- NODE EXTRACTION (skip if key field missing) ---
 
         // 1. Sales Order
-        if (row.salesOrder) {
-            const id = `SO_${row.salesOrder}`;
-            nodeMap.set(id, {
-                id,
-                type: 'SalesOrder',
-                label: `Sales Order\n${row.salesOrder}`,
-                properties: row
-            });
+        if (valid(row.salesOrder)) {
+            addNode(`SO_${row.salesOrder}`, 'SalesOrder', `Sales Order\n${row.salesOrder}`, row);
         }
 
         // 2. Delivery Document
-        if (row.deliveryDocument) {
-            const id = `DEL_${row.deliveryDocument}`;
-            nodeMap.set(id, {
-                id,
-                type: 'Delivery',
-                label: `Delivery\n${row.deliveryDocument}`,
-                properties: row
-            });
+        if (valid(row.deliveryDocument)) {
+            addNode(`DEL_${row.deliveryDocument}`, 'Delivery', `Delivery\n${row.deliveryDocument}`, row);
         }
 
         // 3. Billing Document
-        if (row.billingDocument) {
-            const id = `BILL_${row.billingDocument}`;
-            nodeMap.set(id, {
-                id,
-                type: 'BillingDocument',
-                label: `Billing\n${row.billingDocument}`,
-                properties: row
-            });
+        if (valid(row.billingDocument)) {
+            addNode(`BILL_${row.billingDocument}`, 'BillingDocument', `Billing\n${row.billingDocument}`, row);
         }
 
         // 4. Journal Entry
-        if (row.accountingDocument && row.accountingDocumentType !== 'DZ') { 
-            // Often RV is billing, DZ is payment, but we will classify based on context if we can.
-            // If it came from billing_document_headers -> accountingDocument, it's a JE.
-            const id = `JE_${row.accountingDocument}`;
-            nodeMap.set(id, {
-                id,
-                type: 'JournalEntry',
-                label: `Journal Entry\n${row.accountingDocument}`,
-                properties: row
-            });
+        if (valid(row.accountingDocument) && row.accountingDocumentType !== 'DZ') {
+            addNode(`JE_${row.accountingDocument}`, 'JournalEntry', `Journal Entry\n${row.accountingDocument}`, row);
         }
 
         // 5. Payment Document
-        if (row.clearingAccountingDocument) {
-            const id = `PAY_${row.clearingAccountingDocument}`;
-            nodeMap.set(id, {
-                id,
-                type: 'Payment',
-                label: `Payment\n${row.clearingAccountingDocument}`,
-                properties: row
-            });
+        if (valid(row.clearingAccountingDocument)) {
+            addNode(`PAY_${row.clearingAccountingDocument}`, 'Payment', `Payment\n${row.clearingAccountingDocument}`, row);
         }
 
         // 6. Customer
         const customerId = row.customer || row.soldToParty;
-        if (customerId) {
-            const id = `CUST_${customerId}`;
-            nodeMap.set(id, {
-                id,
-                type: 'Customer',
-                label: `Customer\n${customerId}`,
-                properties: row
-            });
+        if (valid(customerId)) {
+            addNode(`CUST_${customerId}`, 'Customer', `Customer\n${customerId}`, row);
         }
 
-
-
         // --- EDGE EXTRACTION ---
-        // Generates an edge key to prevent duplicate edges
+        // Only create edge if BOTH source and target nodes exist in nodeMap
 
         function addEdge(source, target, type) {
-            if (source && target) {
+            if (source && target && nodeMap.has(source) && nodeMap.has(target)) {
                 const edgeId = `${source}->${target}[${type}]`;
                 if (!edgeMap.has(edgeId)) {
                     edgeMap.set(edgeId, { source, target, type });
@@ -95,35 +76,34 @@ function extractGraph(rows) {
         }
 
         // FULFILLED_BY (SalesOrder -> Delivery)
-        if (row.salesOrder && row.deliveryDocument) {
+        if (valid(row.salesOrder) && valid(row.deliveryDocument)) {
             addEdge(`SO_${row.salesOrder}`, `DEL_${row.deliveryDocument}`, 'FULFILLED_BY');
-        } else if (row.referenceSdDocument && row.deliveryDocument && !row.salesOrder) {
-            // Pure fallback if Sales Order is entirely omitted but a generic reference exists natively.
+        } else if (valid(row.referenceSdDocument) && valid(row.deliveryDocument) && !valid(row.salesOrder)) {
             addEdge(`SO_${row.referenceSdDocument}`, `DEL_${row.deliveryDocument}`, 'FULFILLED_BY');
         }
 
         // BILLED_AS (Delivery -> Billing) or BILLED_DIRECTLY (SalesOrder -> Billing)
-        if (row.deliveryDocument && row.billingDocument) {
+        if (valid(row.deliveryDocument) && valid(row.billingDocument)) {
             addEdge(`DEL_${row.deliveryDocument}`, `BILL_${row.billingDocument}`, 'BILLED_AS');
-        } else if (row.salesOrder && row.billingDocument && !row.deliveryDocument) {
+        } else if (valid(row.salesOrder) && valid(row.billingDocument) && !valid(row.deliveryDocument)) {
             addEdge(`SO_${row.salesOrder}`, `BILL_${row.billingDocument}`, 'BILLED_DIRECTLY');
         }
 
         // POSTED_AS (Billing -> Journal Entry)
-        if (row.billingDocument && row.accountingDocument) {
+        if (valid(row.billingDocument) && valid(row.accountingDocument)) {
             addEdge(`BILL_${row.billingDocument}`, `JE_${row.accountingDocument}`, 'POSTED_AS');
         }
 
         // CLEARED_BY (Journal Entry -> Payment)
-        if (row.accountingDocument && row.clearingAccountingDocument) {
+        if (valid(row.accountingDocument) && valid(row.clearingAccountingDocument)) {
             addEdge(`JE_${row.accountingDocument}`, `PAY_${row.clearingAccountingDocument}`, 'CLEARED_BY');
         }
 
         // Customer Links
-        const soId = row.salesOrder || row.referenceSdDocument; // fallback correctly
-        if (soId && customerId) addEdge(`CUST_${customerId}`, `SO_${soId}`, 'ORDERED');
-        if (row.billingDocument && customerId) addEdge(`BILL_${row.billingDocument}`, `CUST_${customerId}`, 'BILLED_TO');
-    });
+        const soId = row.salesOrder || row.referenceSdDocument;
+        if (valid(soId) && valid(customerId)) addEdge(`CUST_${customerId}`, `SO_${soId}`, 'ORDERED');
+        if (valid(row.billingDocument) && valid(customerId)) addEdge(`BILL_${row.billingDocument}`, `CUST_${customerId}`, 'BILLED_TO');
+    }
 
     const edges = Array.from(edgeMap.values());
     let nodes = Array.from(nodeMap.values());
@@ -139,7 +119,7 @@ function extractGraph(rows) {
         nodes = nodes.filter(n => connectedNodeIds.has(n.id));
     }
 
-    return { nodes, edges };
+    return { nodes, edges, graphTruncated: nodeLimitReached };
 }
 
 module.exports = {

@@ -7,11 +7,23 @@ function validateSql(sql) {
         throw new Error('Empty SQL string provided.');
     }
 
-    const cleanSql = sql.trim().toLowerCase();
-    
+    // Strip SQL comments before validation to prevent bypass via -- or /* */
+    let stripped = sql
+        .replace(/--[^\n]*/g, '')       // single-line comments
+        .replace(/\/\*[\s\S]*?\*\//g, ''); // block comments
+
+    const cleanSql = stripped.trim().toLowerCase();
+
     // Safety check: must be a SELECT statement
     if (!cleanSql.startsWith('select')) {
         throw new Error('Only SELECT statements are permitted.');
+    }
+
+    // Reject multi-statement SQL (semicolons mid-query)
+    // Remove trailing semicolon first, then check for remaining ones
+    const withoutTrailing = cleanSql.replace(/;\s*$/, '');
+    if (withoutTrailing.includes(';')) {
+        throw new Error('Execution rejected: multi-statement SQL is not allowed.');
     }
 
     // Reject modifications and risky statements
@@ -32,7 +44,7 @@ function validateSql(sql) {
     }
 
     // Reject computationally dangerous nested Subqueries inside execution JOINS preserving explicit indexing flows
-    if (/\bJOIN\b[^\n]*\(\s*SELECT/i.test(sql)) {
+    if (/\bJOIN\b[^\n]*\(\s*SELECT/i.test(stripped)) {
         throw new Error('Execution rejected: Subqueries inside JOIN conditions break multi-hop query graphs. Please use explicit direct table joins.');
     }
 

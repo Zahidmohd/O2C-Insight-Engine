@@ -53,7 +53,12 @@ const KB = [
 function retrieveContext(query) {
     const lower = query.toLowerCase();
     for (const entry of KB) {
-        if (entry.keywords.some(kw => lower.includes(kw))) {
+        if (entry.keywords.some(kw => {
+            // Use word boundary regex to avoid substring false positives
+            // e.g. "plant" should not match "planting"
+            const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp(`\\b${escaped}\\b`).test(lower);
+        })) {
             return entry.context;
         }
     }

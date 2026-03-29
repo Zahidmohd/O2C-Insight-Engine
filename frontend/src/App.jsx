@@ -41,21 +41,72 @@ function App() {
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [showSql, setShowSql] = useState(false);
   const [datasetInfo, setDatasetInfo] = useState(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState(null); // null | 'loading' | { success, message }
 
   const cyRef = useRef(null);
   const cyContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const isDraggingTooltip = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
+  const fileInputRef = useRef(null);
+  const abortControllerRef = useRef(null);
 
-  // Fetch active dataset metadata on mount
-  useEffect(() => {
-    const API_BASE = import.meta.env.VITE_API_URL || '';
+  const API_BASE = import.meta.env.VITE_API_URL || '';
+
+  const [datasetError, setDatasetError] = useState(false);
+
+  const fetchDatasetInfo = () => {
+    setDatasetError(false);
     fetch(`${API_BASE}/api/dataset`)
       .then(r => r.json())
       .then(data => setDatasetInfo(data))
-      .catch(() => {});
+      .catch(() => setDatasetError(true));
+  };
+
+  // Fetch active dataset metadata on mount
+  useEffect(() => {
+    fetchDatasetInfo();
   }, []);
+
+  const handleDatasetUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadStatus('loading');
+
+    try {
+      const text = await file.text();
+      let config;
+      try {
+        config = JSON.parse(text);
+      } catch {
+        setUploadStatus({ success: false, message: 'Invalid JSON file. Please upload a valid dataset config.' });
+        return;
+      }
+
+      const res = await axios.post(`${API_BASE}/api/dataset/upload`, { config }, { timeout: 120000 });
+
+      if (res.data.success) {
+        setUploadStatus({
+          success: true,
+          message: `Dataset "${res.data.dataset}" loaded — ${res.data.tablesCreated} tables, ${res.data.rowsLoaded} rows.`
+        });
+        fetchDatasetInfo();
+        setChatHistory([]);
+        setResultInfo(null);
+        setSelectedNode(null);
+        if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null; }
+      } else {
+        setUploadStatus({ success: false, message: res.data.error?.message || 'Upload failed.' });
+      }
+    } catch (err) {
+      const msg = err.response?.data?.error?.message || err.message || 'Upload failed.';
+      setUploadStatus({ success: false, message: msg });
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   useEffect(() => {
     return () => {
@@ -295,9 +346,15 @@ function App() {
       cyRef.current = null;
     }
 
+    // Cancel any in-flight request before starting a new one
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      const API_BASE = import.meta.env.VITE_API_URL || '';
-      const response = await axios.post(`${API_BASE}/api/query`, { query: currentQuery, includeSql: showSql }, { timeout: 30000 });
+      const response = await axios.post(`${API_BASE}/api/query`, { query: currentQuery, includeSql: showSql }, { timeout: 30000, signal: controller.signal });
       const { success, requestId, dataset, queryType, query: reqQuery, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, queryPlan, truncated, message } = response.data;
 
       if (success) {
@@ -330,6 +387,8 @@ function App() {
         initCytoscape(graph, hl || []);
       }
     } catch (err) {
+      // Silently ignore cancelled requests (user fired a new query)
+      if (axios.isCancel(err) || err.name === 'CanceledError') return;
       console.error(err);
       let errMsg = 'An error occurred connecting to the API.';
       if (err.code === 'ECONNABORTED') {
@@ -375,10 +434,10 @@ function App() {
     });
   };
 
-  const dsName = datasetInfo?.displayName || 'Loading...';
+  const dsName = datasetError ? 'Connection Error' : (datasetInfo?.displayName || 'Loading...');
   const dsShort = datasetInfo?.name
     ? datasetInfo.name.replace(/_/g, ' ').split(' ').map(w => w[0]?.toUpperCase()).join('')
-    : '...';
+    : datasetError ? '!' : '...';
 
   return (
     <div className="app-container">
@@ -393,7 +452,58 @@ function App() {
             {datasetInfo.tableCount} tables
           </div>
         )}
+        {datasetError && (
+          <button className="nav-dataset-badge" style={{ cursor: 'pointer', color: '#b91c1c' }} onClick={fetchDatasetInfo}>
+            Retry Connection
+          </button>
+        )}
+        <button className="nav-upload-btn" onClick={() => { setUploadStatus(null); setShowUploadModal(true); }}>
+          Switch Dataset
+        </button>
       </div>
+
+      {/* Dataset Upload Modal */}
+      {showUploadModal && (
+        <div className="modal-overlay" onClick={() => setShowUploadModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Switch Dataset</h3>
+              <button className="modal-close" onClick={() => setShowUploadModal(false)}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <p className="modal-description">
+                Upload a JSON config file to switch the active dataset. The config must include
+                <strong> name</strong>, <strong>tables</strong> (with columns), <strong>relationships</strong>,
+                and <strong>domainKeywords</strong>.
+              </p>
+              <label className="file-upload-label">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json"
+                  onChange={handleDatasetUpload}
+                  disabled={uploadStatus === 'loading'}
+                  className="file-input-hidden"
+                />
+                <span className="file-upload-btn">
+                  {uploadStatus === 'loading' ? 'Uploading...' : 'Choose JSON Config File'}
+                </span>
+              </label>
+              {uploadStatus && uploadStatus !== 'loading' && (
+                <div className={`upload-status ${uploadStatus.success ? 'upload-success' : 'upload-error'}`}>
+                  {uploadStatus.message}
+                </div>
+              )}
+              {uploadStatus === 'loading' && (
+                <div className="upload-status upload-loading">
+                  <div className="dot-pulse"><span></span><span></span><span></span></div>
+                  Initializing dataset...
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="main-content">
         {/* GRAPH PANEL (LEFT) */}

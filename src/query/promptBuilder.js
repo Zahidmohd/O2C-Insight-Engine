@@ -8,17 +8,63 @@ const { getActiveConfig } = require('../config/activeDataset');
 
 // ─── Dynamic Schema Generation ──────────────────────────────────────────────
 
+const MAX_COLUMNS_PER_TABLE = 12;
+
+/**
+ * Collects all columns referenced in relationships for a given table.
+ * These are foreign-key columns that must always appear in the schema.
+ */
+function getFkColumns(config, tableName) {
+    const fkCols = new Set();
+    for (const rel of config.relationships) {
+        for (const ref of [rel.from, rel.to]) {
+            const dotIdx = ref.indexOf('.');
+            const table = ref.substring(0, dotIdx);
+            if (table === tableName) {
+                const cols = ref.substring(dotIdx + 1).split('+');
+                cols.forEach(c => fkCols.add(c));
+            }
+        }
+    }
+    return fkCols;
+}
+
 /**
  * Builds the "--- DATABASE SCHEMA ---" section from config tables.
- * Output format: 1. table_name (col1, col2 PK, col3, ...)
+ * Limits columns per table to MAX_COLUMNS_PER_TABLE.
+ * Always includes: primary key columns + foreign key columns.
+ * Output format: 1. table_name (col1 PK, col2 FK, col3, ...)
  */
 function buildSchemaSection(config) {
     return config.tables.map((t, i) => {
-        const colList = t.columns.map(c => {
-            const isPk = t.primaryKey && t.primaryKey.length === 1 && t.primaryKey[0] === c;
-            return isPk ? `${c} PK` : c;
+        const pkSet = new Set(t.primaryKey || []);
+        const fkSet = getFkColumns(config, t.name);
+
+        // Priority columns: PK first, then FK, then the rest
+        const priorityCols = [];
+        const restCols = [];
+        for (const c of t.columns) {
+            if (pkSet.has(c) || fkSet.has(c)) {
+                priorityCols.push(c);
+            } else {
+                restCols.push(c);
+            }
+        }
+
+        // Fill remaining slots up to MAX_COLUMNS_PER_TABLE
+        const remaining = Math.max(0, MAX_COLUMNS_PER_TABLE - priorityCols.length);
+        const selectedCols = [...priorityCols, ...restCols.slice(0, remaining)];
+        const omitted = t.columns.length - selectedCols.length;
+
+        const colList = selectedCols.map(c => {
+            const tags = [];
+            if (pkSet.has(c)) tags.push('PK');
+            if (fkSet.has(c)) tags.push('FK');
+            return tags.length > 0 ? `${c} ${tags.join(',')}` : c;
         }).join(', ');
-        return `${i + 1}. ${t.name} (${colList})`;
+
+        const suffix = omitted > 0 ? ` ... +${omitted} more` : '';
+        return `${i + 1}. ${t.name} (${colList}${suffix})`;
     }).join('\n');
 }
 
@@ -33,17 +79,23 @@ function parseRef(ref) {
 
 /**
  * Builds the "--- VALIDATED JOIN RELATIONSHIPS ---" section from config.
+ * Highlights the exact column mapping: tableA.colA → tableB.colB
  */
 function buildRelationshipSection(config) {
     return config.relationships.map((r, i) => {
         const from = parseRef(r.from);
         const to = parseRef(r.to);
 
+        // Clear column mapping line
+        const mapping = from.cols.map((fc, j) =>
+            `${from.table}.${fc} → ${to.table}.${to.cols[j]}`
+        ).join(', ');
+
         const joinConditions = from.cols.map((fc, j) =>
             `${to.table}.${to.cols[j]} = ${from.table}.${fc}`
         ).join('\n    AND ');
 
-        return `${i + 1}. ${r.description} (${r.label}):\n   ${r.joinType} ${to.table}\n     ON ${joinConditions}`;
+        return `${i + 1}. ${r.description} (${r.label}):\n   Mapping: ${mapping}\n   ${r.joinType} ${to.table}\n     ON ${joinConditions}`;
     }).join('\n\n');
 }
 
