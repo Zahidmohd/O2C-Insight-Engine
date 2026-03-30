@@ -166,7 +166,8 @@ function tryRuleBasedQuery(query, tag, options) {
         confidence: confidence.score,
         confidenceLabel: confidence.label,
         confidenceReasons: [...confidence.reasons, 'Rule-based query (no LLM used)'],
-        queryPlan: 'RULE_BASED',
+        executionPlan: 'RULE_BASED',
+        queryPlan: buildQueryPlan(sql, explanation),
         truncated: result.rows.length > 100
     };
 }
@@ -366,6 +367,53 @@ function buildExplanation(query, sql) {
 }
 
 /**
+ * Derives a structured query plan from generated SQL + active config.
+ * Exposes which tables were used, which joins were traversed, and why.
+ * Pure SQL parsing — no LLM dependency.
+ */
+function buildQueryPlan(sql, explanation) {
+    const config = getActiveConfig();
+    if (!sql) {
+        return { type: 'UNKNOWN', tablesUsed: [], joinPath: [], reasoning: 'No SQL available.' };
+    }
+
+    const sqlUpper = sql.toUpperCase();
+
+    // 1. Extract tables referenced in SQL (FROM + JOIN clauses)
+    const tablesUsed = config.tables
+        .filter(t => sqlUpper.includes(t.name.toUpperCase()))
+        .map(t => t.displayName || t.name);
+
+    // 2. Extract join path from config relationships that match tables in the SQL
+    const joinPath = config.relationships
+        .filter(r => {
+            const fromTable = r.from.split('.')[0];
+            const toTable = r.to.split('.')[0];
+            return sqlUpper.includes(fromTable.toUpperCase()) && sqlUpper.includes(toTable.toUpperCase());
+        })
+        .map(r => ({
+            from: r.from,
+            to: r.to,
+            label: r.label,
+            joinType: r.joinType
+        }));
+
+    // 3. Classify query plan type
+    let type = 'SIMPLE_QUERY';
+    if (joinPath.length >= 3) type = 'MULTI_HOP_TRACE';
+    else if (joinPath.length >= 1) type = 'MULTI_TABLE_JOIN';
+    if (/\b(COUNT|SUM|AVG|MIN|MAX)\s*\(/i.test(sql)) type = 'AGGREGATION';
+    if (/IS\s+NULL/i.test(sql) && /LEFT\s+JOIN/i.test(sql)) type = 'GAP_ANALYSIS';
+
+    // 4. Build reasoning from explanation context
+    const reasoning = joinPath.length > 0
+        ? `Traversed ${joinPath.length} relationship(s) across ${tablesUsed.length} table(s): ${joinPath.map(j => j.label).join(' → ')}`
+        : `Direct query against ${tablesUsed.length} table(s): ${tablesUsed.join(', ')}`;
+
+    return { type, tablesUsed, joinPath, reasoning };
+}
+
+/**
  * Produces a reliability score (0.0–1.0), a human-readable label, and
  * an array of reasons explaining the score.
  * RAG responses are always 1.0 (direct KB lookup, no SQL uncertainty).
@@ -541,7 +589,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             confidence: 1.0,
             confidenceLabel: 'High',
             confidenceReasons: ['Direct knowledge base lookup'],
-            queryPlan: 'RULE_BASED',
+            executionPlan: 'RULE_BASED',
+            queryPlan: { type: 'RAG_LOOKUP', tablesUsed: [], joinPath: [], reasoning: 'Direct knowledge base lookup — no SQL involved.' },
             explanation: {
                 intent: 'concept explanation',
                 entities: [],
@@ -653,7 +702,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             confidence: 0.1,
             confidenceLabel: 'Low',
             confidenceReasons: ['All LLM providers failed'],
-            queryPlan: 'FALLBACK',
+            executionPlan: 'FALLBACK',
+            queryPlan: { type: 'FALLBACK', tablesUsed: [], joinPath: [], reasoning: 'All LLM providers unavailable — returned suggested queries.' },
             complexity,
             nlAnswer: null,
             suggestions: buildSuggestedQueries()
@@ -716,7 +766,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                         confidence: 0.3,
                         confidenceLabel: 'Low',
                         confidenceReasons: ['Valid SQL generated', 'Referenced document ID not found in dataset'],
-                        queryPlan: 'LLM'
+                        executionPlan: 'LLM',
+                        queryPlan: buildQueryPlan(rawSql, buildExplanation(naturalLanguageQuery, rawSql))
                     };
                 }
                 console.log(`${tag} [VALIDATION] ${check.label} '${extractedId}' exists.`);
@@ -758,7 +809,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                     confidence: 0.3,
                     confidenceLabel: 'Low',
                     confidenceReasons: ['Valid SQL generated', 'Referenced customer not found in dataset'],
-                    queryPlan: 'LLM'
+                    executionPlan: 'LLM',
+                    queryPlan: buildQueryPlan(rawSql, buildExplanation(naturalLanguageQuery, rawSql))
                 };
             }
             console.log(`${tag} [VALIDATION] Customer '${extractedCustId}' exists.`);
@@ -836,16 +888,33 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         // Clarify zero rows explicitly (if it STILL is 0 after fallback)
         if (dbResult.rowCount === 0) {
             console.log(`${tag} [RESULT] Zero rows after all fallback attempts.`);
-            let emptySummary;
-            if (explicitCustChecked) {
-                emptySummary = `No records found for customer '${extractedCustId}' in the dataset.`;
-            } else if (explicitIdChecked) {
-                emptySummary = `The document was found, but no connected flow traversing outbound nodes exists.`;
-            } else {
-                emptySummary = `The query executed correctly, but no matching connected records were found.`;
-            }
 
             const zeroExplanation = buildExplanation(naturalLanguageQuery, rawSql);
+            const isGapIntent = zeroExplanation.intent === 'gap-analysis';
+            const isTraceIntent = zeroExplanation.intent === 'trace';
+
+            // Semantic zero-result classification
+            let resultStatus, emptySummary, reason;
+            if (explicitCustChecked) {
+                resultStatus = 'NO_MATCH';
+                reason = 'INVALID_ID';
+                emptySummary = `No records found for customer '${extractedCustId}' in the dataset.`;
+            } else if (isGapIntent) {
+                resultStatus = 'NO_GAPS_FOUND';
+                reason = 'NO_GAPS';
+                emptySummary = 'No gaps detected — all records have complete linked flows.';
+            } else if (explicitIdChecked || isTraceIntent) {
+                resultStatus = 'INCOMPLETE_FLOW';
+                reason = 'INCOMPLETE_FLOW';
+                emptySummary = explicitIdChecked
+                    ? `The document was found, but no connected flow traversing downstream stages exists.`
+                    : `The query executed but the expected document flow is incomplete or missing stages.`;
+            } else {
+                resultStatus = 'NO_MATCH';
+                reason = 'NO_DATA';
+                emptySummary = `The query executed correctly, but no matching records were found.`;
+            }
+
             const zeroConfidence = calculateConfidence({
                 queryType, fallbackApplied, rowCount: 0, isAggregation: false
             });
@@ -855,8 +924,9 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 dataset: getActiveConfig().name,
                 queryType,
                 summary: emptySummary,
-                reason: 'NO_FLOW',
-                message: 'No records found for the given query.',
+                resultStatus,
+                reason,
+                message: emptySummary,
                 rowCount: 0,
                 keyFields: [],
                 executionTimeMs: Number(dbResult.executionTimeMs),
@@ -867,7 +937,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 confidence: zeroConfidence.score,
                 confidenceLabel: zeroConfidence.label,
                 confidenceReasons: zeroConfidence.reasons,
-                queryPlan: fallbackApplied ? 'FALLBACK' : 'LLM'
+                executionPlan: fallbackApplied ? 'FALLBACK' : 'LLM',
+                queryPlan: buildQueryPlan(rawSql, zeroExplanation)
             };
         }
 
@@ -998,7 +1069,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         finalResponse.confidenceReasons = confidenceResult.reasons;
         finalResponse.queryType = queryType; // "SQL" or "HYBRID"
         finalResponse.dataset = getActiveConfig().name;
-        finalResponse.queryPlan = fallbackApplied ? 'FALLBACK' : 'LLM';
+        finalResponse.executionPlan = fallbackApplied ? 'FALLBACK' : 'LLM';
+        finalResponse.queryPlan = buildQueryPlan(rawSql, finalResponse.explanation);
         finalResponse.complexity = complexity;
 
         // Strip SQL from response unless caller explicitly requested it

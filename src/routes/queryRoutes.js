@@ -570,6 +570,7 @@ router.post('/query', rateLimit, async (req, res) => {
             highlightNodes: result.highlightNodes || [],
             executionTimeMs: Number(result.executionTimeMs),
             reason: result.reason,
+            resultStatus: result.resultStatus || null,         // "INCOMPLETE_FLOW" | "NO_GAPS_FOUND" | "NO_MATCH" | null
             message: result.message || null,                   // Zero-row human-readable message
             suggestions: result.suggestions,
             summary: result.summary,
@@ -579,7 +580,8 @@ router.post('/query', rateLimit, async (req, res) => {
             confidence: result.confidence ?? null,             // 0.0–1.0 reliability score
             confidenceLabel: result.confidenceLabel || null,   // "High" | "Medium" | "Low"
             confidenceReasons: result.confidenceReasons || [], // Human-readable score reasons
-            queryPlan: result.queryPlan || null,               // "RULE_BASED" | "LLM" | "FALLBACK"
+            executionPlan: result.executionPlan || null,         // "RULE_BASED" | "LLM" | "FALLBACK"
+            queryPlan: result.queryPlan || null,               // { type, tablesUsed, joinPath, reasoning }
             complexity: result.complexity || null,             // "SIMPLE" | "MODERATE" | "COMPLEX" (model routing)
             truncated: result.truncated || false,              // true if rows were capped at 1000
             graphTruncated: result.graphTruncated || false     // true if graph nodes were capped at 200
