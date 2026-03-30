@@ -380,7 +380,7 @@ function cleanResponse(responseBody) {
     return sql.trim();
 }
 
-function buildNLAnswerPrompt(userQuestion, rows, rowCount, context = null) {
+function buildNLAnswerPrompt(userQuestion, rows, rowCount, context = null, datasetName = null) {
     const MAX_ROWS_FOR_NL = 10;
     const truncated = rows.slice(0, MAX_ROWS_FOR_NL);
     const rowsJson = JSON.stringify(truncated, null, 2);
@@ -389,7 +389,11 @@ function buildNLAnswerPrompt(userQuestion, rows, rowCount, context = null) {
         ? `\nAdditional Business Context:\n${context}\n`
         : '';
 
-    return `You are a data analyst for an SAP Order-to-Cash system.
+    const systemRole = datasetName
+        ? `You are a data analyst for the "${datasetName}" dataset.`
+        : 'You are a data analyst.';
+
+    return `${systemRole}
 
 The user asked: "${userQuestion}"
 
@@ -458,8 +462,8 @@ async function getSqlFromLLM(prompt, complexity = 'MODERATE') {
 /**
  * NL answer generation with dynamic provider ordering.
  */
-async function generateNLAnswer(userQuestion, rows, rowCount, context = null, complexity = 'SIMPLE') {
-    const prompt = buildNLAnswerPrompt(userQuestion, rows, rowCount, context);
+async function generateNLAnswer(userQuestion, rows, rowCount, context = null, complexity = 'SIMPLE', datasetName = null) {
+    const prompt = buildNLAnswerPrompt(userQuestion, rows, rowCount, context, datasetName);
     const order = getSortedProviders();
 
     for (const providerId of order) {

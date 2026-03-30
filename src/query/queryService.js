@@ -62,7 +62,7 @@ function setCached(query, includeSql, response) {
 
 /**
  * Validates domain safety before spending API tokens
- * Rejects questions wildly outside the SAP O2C domain
+ * Rejects questions wildly outside the active dataset's domain
  */
 function isIntentValid(query) {
     const queryLower = query.toLowerCase().trim();
@@ -467,11 +467,19 @@ function buildSuggestedQueries() {
         ];
     }
 
-    // Generic: build suggestions from table names
-    return config.tables.slice(0, 5).map(t => {
-        const display = t.displayName || t.name.replace(/_/g, ' ');
-        return `Show all ${display}`;
-    });
+    // Generic: build diverse suggestions from table names
+    const suggestions = [];
+    const tables = config.tables.slice(0, 5);
+    const patterns = [
+        (name) => `Show all ${name}`,
+        (name) => `Count all ${name}`,
+        (name) => `List ${name} with details`,
+    ];
+    for (let i = 0; i < tables.length; i++) {
+        const display = tables[i].displayName || tables[i].name.replace(/_/g, ' ');
+        suggestions.push(patterns[i % patterns.length](display));
+    }
+    return suggestions;
 }
 
 /**
@@ -875,7 +883,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         let nlAnswer = null;
         try {
             nlAnswer = await withTimeout(
-                generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount, ragContext, complexity),
+                generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount, ragContext, complexity, getActiveConfig().displayName || getActiveConfig().name),
                 50000,
                 'NL Answer Generation'
             );

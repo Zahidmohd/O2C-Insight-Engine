@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(taskkill //PID 8008 //F)",
+      "Bash(curl -s http://localhost:3000/api/health)",
+      "Bash(node test-api.js)"
+    ]
+  }
+}

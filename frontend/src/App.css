@@ -126,10 +126,13 @@ body, html {
   background: #ffffff;
   border-radius: 14px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
-  width: 460px;
+  width: 520px;
   max-width: 90vw;
+  min-height: 340px;
   overflow: hidden;
   animation: slideUp 0.2s ease-out;
+  display: flex;
+  flex-direction: column;
 }
 
 @keyframes slideUp {
@@ -169,6 +172,9 @@ body, html {
 
 .modal-body {
   padding: 24px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-description {
@@ -240,7 +246,7 @@ body, html {
 
 /* ===================== ONBOARDING WIZARD ===================== */
 .modal-wide {
-  width: 640px;
+  width: 680px;
   max-height: 85vh;
   overflow-y: auto;
 }
@@ -1442,7 +1448,8 @@ body, html {
 .documents-section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  flex: 1;
 }
 
 .document-list {

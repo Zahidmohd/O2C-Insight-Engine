@@ -8,6 +8,7 @@
 
 const { getChunkCount, searchSimilar } = require('./vectorStore');
 const { embed } = require('./embeddingService');
+const { getActiveConfig } = require('../config/activeDataset');
 
 const KB = [
     {
@@ -73,14 +74,17 @@ async function retrieveContext(query) {
         console.warn('[RAG] Vector search failed, falling back to keyword KB:', err.message);
     }
 
-    // 2. Fall back to keyword matching
-    const lower = query.toLowerCase();
-    for (const entry of KB) {
-        if (entry.keywords.some(kw => {
-            const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            return new RegExp(`\\b${escaped}\\b`).test(lower);
-        })) {
-            return entry.context;
+    // 2. Fall back to keyword matching (only for SAP O2C dataset — entries are O2C-specific)
+    const config = getActiveConfig();
+    if (config && config.name === 'sap_o2c') {
+        const lower = query.toLowerCase();
+        for (const entry of KB) {
+            if (entry.keywords.some(kw => {
+                const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                return new RegExp(`\\b${escaped}\\b`).test(lower);
+            })) {
+                return entry.context;
+            }
         }
     }
     return null;
