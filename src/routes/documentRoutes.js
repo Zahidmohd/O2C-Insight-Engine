@@ -69,7 +69,8 @@ router.post('/documents/upload', docUpload.single('file'), async (req, res) => {
         const embeddings = await embedBatch(chunkTexts);
 
         // 4. Store in SQLite
-        const documentId = insertDocument({
+        const dbConn = req.db;
+        const documentId = await insertDocument(dbConn, {
             title,
             filename: req.file.originalname,
             fileType: ext.slice(1),
@@ -81,7 +82,7 @@ router.post('/documents/upload', docUpload.single('file'), async (req, res) => {
             index: c.index,
             embedding: embeddings[i]
         }));
-        insertChunks(documentId, chunksWithEmbeddings);
+        await insertChunks(dbConn, documentId, chunksWithEmbeddings);
 
         console.log(`[DOC_UPLOAD] Document "${title}" stored (id=${documentId}, ${chunks.length} chunks).`);
 
@@ -110,10 +111,11 @@ router.post('/documents/upload', docUpload.single('file'), async (req, res) => {
 
 // ─── List Documents ──────────────────────────────────────────────────────────
 
-router.get('/documents', (req, res) => {
+router.get('/documents', async (req, res) => {
     try {
-        const documents = listDocuments();
-        const totalChunks = getChunkCount();
+        const dbConn = req.db;
+        const documents = await listDocuments(dbConn);
+        const totalChunks = await getChunkCount(dbConn);
         return res.status(200).json({
             success: true,
             documents,
@@ -130,7 +132,7 @@ router.get('/documents', (req, res) => {
 
 // ─── Delete Document ─────────────────────────────────────────────────────────
 
-router.delete('/documents/:id', (req, res) => {
+router.delete('/documents/:id', async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         if (isNaN(id)) {
@@ -140,7 +142,7 @@ router.delete('/documents/:id', (req, res) => {
             });
         }
 
-        deleteDocument(id);
+        await deleteDocument(req.db, id);
         console.log(`[DOC_DELETE] Document ${id} deleted.`);
 
         return res.status(200).json({ success: true, message: `Document ${id} deleted.` });

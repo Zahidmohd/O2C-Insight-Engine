@@ -4,6 +4,8 @@ const helmet = require('helmet');
 const path = require('path');
 const queryRoutes = require('./routes/queryRoutes');
 const documentRoutes = require('./routes/documentRoutes');
+const tenantRoutes = require('./routes/tenantRoutes');
+const tenantResolver = require('./middleware/tenantResolver');
 const db = require('./db/connection');
 const { initDocumentTables } = require('./rag/vectorStore');
 
@@ -36,10 +38,11 @@ app.use((req, res, next) => {
     next();
 });
 
-// Initialize document tables before mounting routes
-initDocumentTables();
+// Tenant resolution (attaches req.db, req.tenantId, req.config)
+app.use(tenantResolver);
 
 // Routes
+app.use('/api', tenantRoutes);
 app.use('/api', queryRoutes);
 app.use('/api', documentRoutes);
 
@@ -57,35 +60,39 @@ app.use((err, req, res, next) => {
     });
 });
 
-const server = app.listen(PORT, () => {
-    console.log(`🚀 API Server running on http://localhost:${PORT}`);
-});
-
-server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-        console.error(`❌ Port ${PORT} is already in use. Kill the existing process or use a different port.`);
-        console.error(`   Run: npx kill-port ${PORT}`);
-    } else {
-        console.error('❌ Server error:', err.message);
-    }
-    process.exit(1);
-});
-
-// Graceful shutdown — close HTTP server and database connection
-function shutdown(signal) {
-    console.log(`\n${signal} received. Shutting down gracefully...`);
-    server.close(() => {
-        db.close();
-        console.log('Server closed.');
-        process.exit(0);
+// Async startup — initialize document tables before listening
+(async () => {
+    await initDocumentTables();
+    const server = app.listen(PORT, () => {
+        console.log(`🚀 API Server running on http://localhost:${PORT}`);
     });
-    setTimeout(() => {
-        console.error('Forced shutdown after timeout.');
-        process.exit(1);
-    }, 10000).unref();
-}
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+    server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.error(`❌ Port ${PORT} is already in use. Kill the existing process or use a different port.`);
+            console.error(`   Run: npx kill-port ${PORT}`);
+        } else {
+            console.error('❌ Server error:', err.message);
+        }
+        process.exit(1);
+    });
+
+    // Graceful shutdown — close HTTP server and database connection
+    function shutdown(signal) {
+        console.log(`\n${signal} received. Shutting down gracefully...`);
+        server.close(() => {
+            db.close();
+            console.log('Server closed.');
+            process.exit(0);
+        });
+        setTimeout(() => {
+            console.error('Forced shutdown after timeout.');
+            process.exit(1);
+        }, 10000).unref();
+    }
+
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+})();
 
 module.exports = app;

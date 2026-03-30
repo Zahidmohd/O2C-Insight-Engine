@@ -6,10 +6,9 @@ const os = require('os');
 const multer = require('multer');
 const router = express.Router();
 const queryService = require('../query/queryService');
-const { getActiveConfig, setActiveConfig, defaultConfig } = require('../config/activeDataset');
+const { getActiveConfig, setActiveConfig, defaultConfig, setTenantConfig } = require('../config/activeDataset');
 const initDB = require('../db/init');
 const { loadDataset } = require('../db/loader');
-const db = require('../db/connection');
 const { validateDatasetConfig } = require('../config/datasetValidator');
 const { inferSchema, recordsToJSONL } = require('../onboarding/schemaInference');
 const { inferRelationships } = require('../onboarding/relationshipInference');
@@ -99,14 +98,14 @@ setInterval(() => {
 }, 10 * 60 * 1000); // Sweep every 10 minutes
 
 // ─── Health Check ────────────────────────────────────────────────────────────
-router.get('/health', (req, res) => {
+router.get('/health', async (req, res) => {
     try {
-        const db = require('../db/connection');
-        db.prepare('SELECT 1').get();
+        await req.db.getAsync('SELECT 1');
         res.json({
             status: 'ok',
             timestamp: new Date().toISOString(),
-            dataset: getActiveConfig().name
+            dataset: getActiveConfig().name,
+            tenantId: req.tenantId || null
         });
     } catch (err) {
         res.status(503).json({ status: 'unavailable', error: err.message });
@@ -121,7 +120,7 @@ router.get('/providers', (req, res) => {
 
 // ─── Dataset Metadata Endpoint ───────────────────────────────────────────────
 router.get('/dataset', (req, res) => {
-    const config = getActiveConfig();
+    const config = req.config;
     return res.status(200).json({
         name: config.name,
         displayName: config.displayName,
@@ -250,7 +249,7 @@ router.post('/dataset/upload/confirm', rateLimit, async (req, res) => {
         });
     }
 
-    const previousConfig = getActiveConfig();
+    const previousConfig = req.config;
     isDatasetUpdating = true;
 
     try {
@@ -321,10 +320,11 @@ router.post('/dataset/upload/confirm', rateLimit, async (req, res) => {
         console.log(`[RAW_CONFIRM] Activating dataset: ${config.name} (v${config.version})`);
 
         try {
-            await initDB(config);
-            const totalRows = await loadDataset(config);
-            setActiveConfig(config);
-            queryService.clearCache();
+            const dbConn = req.db;
+            await initDB(config, dbConn);
+            const totalRows = await loadDataset(config, dbConn);
+            if (req.tenantId) setTenantConfig(req.tenantId, config); else setActiveConfig(config);
+            queryService.clearCache(req.tenantId);
 
             // Clean up session
             if (session.dataDir && fs.existsSync(session.dataDir)) {
@@ -347,12 +347,12 @@ router.post('/dataset/upload/confirm', rateLimit, async (req, res) => {
         } catch (loadErr) {
             console.error(`[RAW_CONFIRM] Load failed, restoring "${previousConfig.name}":`, loadErr.message);
             try {
-                await initDB(previousConfig);
-                if (previousConfig.dataDir) await loadDataset(previousConfig);
+                await initDB(previousConfig, dbConn);
+                if (previousConfig.dataDir) await loadDataset(previousConfig, dbConn);
             } catch (restoreErr) {
                 console.error(`[RAW_CONFIRM] Restore also failed:`, restoreErr.message);
             }
-            setActiveConfig(previousConfig);
+            if (req.tenantId) setTenantConfig(req.tenantId, previousConfig); else setActiveConfig(previousConfig);
 
             return res.status(500).json({
                 success: false,
@@ -361,7 +361,7 @@ router.post('/dataset/upload/confirm', rateLimit, async (req, res) => {
         }
 
     } catch (e) {
-        setActiveConfig(previousConfig);
+        if (req.tenantId) setTenantConfig(req.tenantId, previousConfig); else setActiveConfig(previousConfig);
         console.error('[RAW_CONFIRM] Error:', e.message);
         return res.status(500).json({
             success: false,
@@ -381,7 +381,7 @@ router.post('/dataset/upload', rateLimit, async (req, res) => {
         });
     }
 
-    const previousConfig = getActiveConfig();
+    const previousConfig = req.config;
     isDatasetUpdating = true;
 
     try {
@@ -432,21 +432,22 @@ router.post('/dataset/upload', rateLimit, async (req, res) => {
         // The loader manages its own per-table transactions internally.
         console.log(`[DATASET_UPLOAD] Activating dataset: ${config.name} (v${config.version})`);
 
+        const dbConn2 = req.db;
         try {
             // 1. Drop existing tables, init schema from new config
-            await initDB(config);
+            await initDB(config, dbConn2);
 
             // 2. Load data from config.dataDir (if data exists)
             let totalRows = 0;
             if (config.dataDir) {
-                totalRows = await loadDataset(config);
+                totalRows = await loadDataset(config, dbConn2);
             }
 
             // 3. Only set active config AFTER successful load
-            setActiveConfig(config);
+            if (req.tenantId) setTenantConfig(req.tenantId, config); else setActiveConfig(config);
 
             // 4. Clear query cache (stale for new dataset)
-            queryService.clearCache();
+            queryService.clearCache(req.tenantId);
 
             console.log(`[DATASET_UPLOAD] Dataset "${config.name}" activated. ${totalRows} rows loaded.`);
 
@@ -464,12 +465,12 @@ router.post('/dataset/upload', rateLimit, async (req, res) => {
             // Restore previous dataset — reinit schema and reload data
             console.error(`[DATASET_UPLOAD] Load failed, restoring "${previousConfig.name}":`, loadErr.message);
             try {
-                await initDB(previousConfig);
-                if (previousConfig.dataDir) await loadDataset(previousConfig);
+                await initDB(previousConfig, dbConn2);
+                if (previousConfig.dataDir) await loadDataset(previousConfig, dbConn2);
             } catch (restoreErr) {
                 console.error(`[DATASET_UPLOAD] Restore also failed:`, restoreErr.message);
             }
-            setActiveConfig(previousConfig);
+            if (req.tenantId) setTenantConfig(req.tenantId, previousConfig); else setActiveConfig(previousConfig);
 
             return res.status(500).json({
                 success: false,
@@ -479,7 +480,7 @@ router.post('/dataset/upload', rateLimit, async (req, res) => {
 
     } catch (e) {
         // Restore previous config on any unexpected error
-        setActiveConfig(previousConfig);
+        if (req.tenantId) setTenantConfig(req.tenantId, previousConfig); else setActiveConfig(previousConfig);
         console.error('[DATASET_UPLOAD] Error:', e.message);
         return res.status(500).json({
             success: false,
@@ -499,8 +500,10 @@ router.post('/query', rateLimit, async (req, res) => {
         });
     }
 
-    // 1. Generate unique request ID for tracing
+    // 1. Generate unique trace ID for request lifecycle
     const requestId = crypto.randomUUID();
+    const traceId = requestId;
+    const pipelineStart = Date.now();
 
     try {
         const { query } = req.body;
@@ -545,7 +548,7 @@ router.post('/query', rateLimit, async (req, res) => {
         const includeSql = req.body.includeSql === true;
 
         // Pass to engine with options
-        const result = await queryService.processQuery(trimmedQuery, requestId, { includeSql });
+        const result = await queryService.processQuery(trimmedQuery, requestId, { includeSql, tenantId: req.tenantId }, req.db, req.config);
 
         // Format and Return explicitly exactly as required
         if (!result.success && result.error) {
@@ -556,11 +559,43 @@ router.post('/query', rateLimit, async (req, res) => {
             });
         }
 
-        const activeConfig = getActiveConfig();
+        const activeConfig = req.config;
+
+        // Derive dataConfidence from existing confidence + query plan
+        const qp = result.queryPlan;
+        const joinCount = qp && qp.joinPath ? qp.joinPath.length : 0;
+        const conf = result.confidence ?? 0;
+        const dataConfidence = {
+            level: conf >= 0.8 ? 'HIGH' : conf >= 0.5 ? 'MEDIUM' : 'LOW',
+            reason: joinCount >= 3
+                ? `Multi-hop query across ${joinCount} joins — ${conf >= 0.8 ? 'all stages connected' : 'some stages may be incomplete'}`
+                : joinCount >= 1
+                ? `Cross-table query with ${joinCount} join(s) — data availability ${conf >= 0.8 ? 'confirmed' : 'partial'}`
+                : `Direct table query — ${result.rowCount > 0 ? 'data found' : 'no matching records'}`
+        };
+
+        // Timing metrics
+        const totalTimeMs = Date.now() - pipelineStart;
+        const sqlTimeMs = Number(result.executionTimeMs) || 0;
+        const metrics = {
+            totalTimeMs,
+            sqlTimeMs,
+            llmTimeMs: Math.max(0, totalTimeMs - sqlTimeMs),
+        };
+
+        // Optional debug info (only in DEBUG_MODE)
+        const debug = process.env.DEBUG_MODE === 'true' ? {
+            tenantId: req.tenantId || null,
+            mode: req.db?.type || 'sqlite',
+            db: req.db?.type || 'sqlite',
+            config: activeConfig.name,
+            tablesUsed: qp?.tablesUsed || []
+        } : undefined;
 
         return res.status(200).json({
             success: true,
             requestId,
+            traceId,
             dataset: result.dataset || activeConfig.name,
             query: trimmedQuery,
             sql: result.generatedSql,                          // undefined when includeSql=false
@@ -569,6 +604,7 @@ router.post('/query', rateLimit, async (req, res) => {
             graph: result.graph || { nodes: [], edges: [] },
             highlightNodes: result.highlightNodes || [],
             executionTimeMs: Number(result.executionTimeMs),
+            metrics,                                           // { totalTimeMs, sqlTimeMs, llmTimeMs }
             reason: result.reason,
             resultStatus: result.resultStatus || null,         // "INCOMPLETE_FLOW" | "NO_GAPS_FOUND" | "NO_MATCH" | null
             message: result.message || null,                   // Zero-row human-readable message
@@ -580,11 +616,13 @@ router.post('/query', rateLimit, async (req, res) => {
             confidence: result.confidence ?? null,             // 0.0–1.0 reliability score
             confidenceLabel: result.confidenceLabel || null,   // "High" | "Medium" | "Low"
             confidenceReasons: result.confidenceReasons || [], // Human-readable score reasons
+            dataConfidence,                                    // { level: HIGH|MEDIUM|LOW, reason }
             executionPlan: result.executionPlan || null,         // "RULE_BASED" | "LLM" | "FALLBACK"
             queryPlan: result.queryPlan || null,               // { type, tablesUsed, joinPath, reasoning }
             complexity: result.complexity || null,             // "SIMPLE" | "MODERATE" | "COMPLEX" (model routing)
             truncated: result.truncated || false,              // true if rows were capped at 1000
-            graphTruncated: result.graphTruncated || false     // true if graph nodes were capped at 200
+            graphTruncated: result.graphTruncated || false,    // true if graph nodes were capped at 200
+            debug                                              // only present when DEBUG_MODE=true
         });
 
     } catch (e) {

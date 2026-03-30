@@ -281,15 +281,18 @@ Config Generation
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/query` | Natural language query → SQL → results |
-| `GET` | `/api/dataset/info` | Active dataset metadata (tables, rows, name) |
-| `POST` | `/api/dataset/upload` | Upload dataset config JSON |
+| `POST` | `/api/query` | Natural language query → SQL → results (tenant-scoped) |
+| `GET` | `/api/dataset/info` | Active dataset metadata (tenant-scoped) |
+| `POST` | `/api/dataset/upload` | Upload dataset config JSON (tenant-scoped) |
 | `POST` | `/api/dataset/upload/raw` | Upload raw JSONL/CSV/ZIP files for onboarding |
 | `POST` | `/api/dataset/upload/confirm` | Confirm schema + relationships, finalize dataset |
 | `GET` | `/api/providers` | LLM provider health status |
-| `POST` | `/api/documents/upload` | Upload document (PDF/DOCX/TXT/MD) → extract → chunk → embed → store |
-| `GET` | `/api/documents` | List uploaded documents with chunk counts |
+| `POST` | `/api/documents/upload` | Upload document → extract → chunk → embed → store (tenant-scoped) |
+| `GET` | `/api/documents` | List uploaded documents (tenant-scoped) |
 | `DELETE` | `/api/documents/:id` | Delete document and all its chunks |
+| `POST` | `/api/tenants` | Create tenant (auto-provisions Turso DB) |
+| `GET` | `/api/tenants` | List registered tenants |
+| `DELETE` | `/api/tenants/:id` | Delete tenant + destroy Turso DB |
 
 ### 8.1 Query Response Shape
 
@@ -393,17 +396,22 @@ src/
 │   ├── documentExtractor.js     ← PDF/DOCX/TXT/MD text extraction
 │   ├── chunker.js               ← Recursive character text splitter
 │   └── zipExtractor.js          ← ZIP archive extraction for dataset uploads
+├── middleware/
+│   └── tenantResolver.js        ← Resolves X-Tenant-Id → req.db + req.config
 ├── config/
-│   └── datasetConfig.js         ← Active dataset config management
+│   └── datasetConfig.js         ← Global + per-tenant config management
 ├── onboarding/
 │   ├── schemaInference.js       ← Parse JSONL/CSV, infer tables + columns + PK
 │   ├── relationshipInference.js ← Suggest relationships with confidence scores
 │   └── configGenerator.js       ← Generate full config from approved schema
 ├── db/
-│   ├── connection.js            ← SQLite connection factory
+│   ├── connection.js            ← Global SQLite connection (dev/tests fallback)
+│   ├── tursoAdapter.js          ← Turso/LibSQL adapter (async, matches SQLite API)
+│   ├── tenantRegistry.js        ← Tenant → Turso credentials + connection pool
 │   ├── schema.sql               ← CREATE TABLE + CREATE INDEX statements
-│   └── loader.js                ← JSONL → SQLite ingestion with transforms
+│   └── loader.js                ← JSONL → DB ingestion (SQLite + Turso compatible)
 └── routes/
     ├── queryRoutes.js           ← Express routes (query, upload, providers)
-    └── documentRoutes.js        ← Document upload/list/delete API
+    ├── documentRoutes.js        ← Document upload/list/delete API
+    └── tenantRoutes.js          ← Tenant CRUD + Turso auto-provisioning
 ```

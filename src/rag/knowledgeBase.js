@@ -58,13 +58,14 @@ const KB = [
  * @param {string} query
  * @returns {Promise<string | null>}
  */
-async function retrieveContext(query) {
+async function retrieveContext(query, dbConn = null) {
+    const db = dbConn || require('../db/connection');
     // 1. Try vector search if documents have been uploaded
     try {
-        const chunkCount = getChunkCount();
+        const chunkCount = await getChunkCount(db);
         if (chunkCount > 0) {
             const queryEmbedding = await embed(query);
-            const results = searchSimilar(queryEmbedding, 5, 0.3);
+            const results = await searchSimilar(db, queryEmbedding, 5, 0.3);
             if (results.length > 0) {
                 console.log(`[RAG] Vector search returned ${results.length} chunks (top score: ${results[0].score.toFixed(3)})`);
                 return results.map(r => r.text).join('\n\n');

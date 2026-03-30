@@ -4,14 +4,13 @@ const db = require('../db/connection');
  * Execute validated query string returning raw rows.
  * Accepts optional params array for parameterized queries (prevents SQL injection).
  */
-async function executeQuery(sql, params = []) {
+async function executeQuery(sql, params = [], dbConn = db) {
     try {
         const start = process.hrtime();
 
         // Execute the query
-        // db.allAsync was securely defined in connection.js
-        const rows = await db.allAsync(sql, params);
-        
+        const rows = await dbConn.allAsync(sql, params);
+
         const delta = process.hrtime(start);
         const execTimeMs = (delta[0] * 1000) + (delta[1] / 1000000);
 
@@ -35,12 +34,13 @@ async function executeQuery(sql, params = []) {
 }
 
 /**
- * Synchronous version for rule-based queries (better-sqlite3 is sync internally).
+ * Direct query execution (previously sync, now async for Turso compatibility).
+ * Used by rule-based queries in queryService.
  */
-function executeQuerySync(sql, params = []) {
+async function executeQueryDirect(sql, params = [], dbConn = db) {
     try {
         const start = process.hrtime();
-        const rows = db.prepare(sql).all(...params);
+        const rows = await dbConn.allAsync(sql, params);
         const delta = process.hrtime(start);
         const execTimeMs = (delta[0] * 1000) + (delta[1] / 1000000);
 
@@ -55,12 +55,14 @@ function executeQuerySync(sql, params = []) {
             truncated
         };
     } catch (error) {
-        console.error('SQL Execution Error (sync):', error.message);
+        console.error('SQL Execution Error (direct):', error.message);
         return { success: false, error: error.message };
     }
 }
 
 module.exports = {
     executeQuery,
-    executeQuerySync
+    executeQueryDirect,
+    // Backward compat alias
+    executeQuerySync: executeQueryDirect
 };

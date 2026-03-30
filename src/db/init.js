@@ -24,19 +24,20 @@ function generateSchemaFromConfig(config) {
  * @param {object|null} config - If provided (dataset switch), drops all existing tables
  *   and generates schema from this config. If null, uses schema.sql for the default
  *   SAP O2C dataset or falls back to generating from the active config.
+ * @param {object} dbConn - Database connection (defaults to global SQLite)
  */
-async function initDB(config = null) {
+async function initDB(config = null, dbConn = db) {
     try {
         console.log('Initializing database schema...');
 
         // If a new config is provided (dataset switch), drop all existing tables first
         if (config) {
             console.log('Dropping existing tables for dataset switch...');
-            const existingTables = db.prepare(
+            const existingTables = await dbConn.allAsync(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('documents', 'document_chunks')"
-            ).all();
+            );
             for (const t of existingTables) {
-                db.exec(`DROP TABLE IF EXISTS "${t.name}"`);
+                await dbConn.execAsync(`DROP TABLE IF EXISTS "${t.name}"`);
             }
             console.log(`Dropped ${existingTables.length} tables.`);
         }
@@ -55,7 +56,7 @@ async function initDB(config = null) {
             console.log(`Generated schema from config (${effectiveConfig.tables.length} tables).`);
         }
 
-        await db.execAsync(schemaSql);
+        await dbConn.execAsync(schemaSql);
 
         console.log('✅ Database schema initialized successfully.');
     } catch (err) {

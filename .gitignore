@@ -29,3 +29,6 @@ build/
 
 # Uploaded datasets
 datasets/
+
+# Tenant registry (contains auth tokens)
+data/tenants.json

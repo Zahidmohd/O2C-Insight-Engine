@@ -29,4 +29,16 @@ db.execAsync = function (sql) {
     return Promise.resolve(this.exec(sql));
 };
 
+// Batch write — atomic execution of multiple statements (matches Turso adapter API)
+db.batchWrite = function (statements) {
+    const txn = this.transaction((stmts) => {
+        for (const s of stmts) {
+            this.prepare(s.sql).run(...(s.args || []));
+        }
+    });
+    return Promise.resolve(txn(statements));
+};
+
+db.type = 'sqlite';
+
 module.exports = db;

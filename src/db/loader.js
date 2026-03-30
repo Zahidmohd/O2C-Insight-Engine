@@ -6,7 +6,7 @@ const { getActiveConfig, defaultConfig } = require('../config/activeDataset');
 
 const BATCH_SIZE = 100;
 
-async function loadTable(tableConfig, dataDir) {
+async function loadTable(tableConfig, dataDir, dbConn = db) {
   const dirPath = path.resolve(dataDir, tableConfig.directory);
   // Prevent path traversal — resolved path must stay within the data directory
   // Use dataDir + sep to avoid prefix collisions (e.g. /app/data vs /app/datax)
@@ -24,7 +24,12 @@ async function loadTable(tableConfig, dataDir) {
   let totalInserted = 0;
 
   console.log(`Starting load for table: ${tableConfig.name}`);
-  await db.execAsync('BEGIN TRANSACTION');
+  const isTurso = dbConn.type === 'turso';
+
+  // Turso HTTP client doesn't support manual BEGIN/COMMIT — use batchWrite instead
+  if (!isTurso) {
+    await dbConn.execAsync('BEGIN TRANSACTION');
+  }
 
   try {
     for (const file of files) {
@@ -72,7 +77,7 @@ async function loadTable(tableConfig, dataDir) {
 
         // Execute batch if limit reached
         if (batch.length >= BATCH_SIZE) {
-          await executeBatch(batch, batchParams);
+          await executeBatch(batch, batchParams, dbConn);
           totalInserted += batch.length;
           batch = [];
           batchParams = [];
@@ -81,25 +86,36 @@ async function loadTable(tableConfig, dataDir) {
 
       // Execute remaining batch
       if (batch.length > 0) {
-        await executeBatch(batch, batchParams);
+        await executeBatch(batch, batchParams, dbConn);
         totalInserted += batch.length;
       }
     }
 
-    await db.execAsync('COMMIT');
+    if (!isTurso) {
+      await dbConn.execAsync('COMMIT');
+    }
     console.log(`✅ Loaded ${totalInserted} rows into ${tableConfig.name}`);
     return totalInserted;
   } catch (err) {
-    await db.execAsync('ROLLBACK');
+    if (!isTurso) {
+      try { await dbConn.execAsync('ROLLBACK'); } catch {}
+    }
     console.error(`❌ Failed to load ${tableConfig.name}: ${err.message}`);
     throw err;
   }
 }
 
 // Helper to execute multiple parameterised statements in a batch
-async function executeBatch(queries, paramSets) {
-  for (let i = 0; i < queries.length; i++) {
-    await db.runAsync(queries[i], paramSets[i]);
+async function executeBatch(queries, paramSets, dbConn = db) {
+  if (dbConn.type === 'turso') {
+    // Turso: use batchWrite for atomic batch execution
+    const statements = queries.map((sql, i) => ({ sql, args: paramSets[i] }));
+    await dbConn.batchWrite(statements);
+  } else {
+    // SQLite: individual executions within existing transaction
+    for (let i = 0; i < queries.length; i++) {
+      await dbConn.runAsync(queries[i], paramSets[i]);
+    }
   }
 }
 
@@ -108,9 +124,10 @@ async function executeBatch(queries, paramSets) {
  * Called at runtime for dataset switching, or at startup via main().
  *
  * @param {object} config - Dataset config object (must have tables + dataDir)
+ * @param {object} dbConn - Database connection (defaults to global SQLite)
  * @returns {number} Total rows inserted
  */
-async function loadDataset(config) {
+async function loadDataset(config, dbConn = db) {
   const dataDir = config.dataDir
     ? path.resolve(__dirname, config.dataDir)
     : path.resolve(__dirname, '../../sap-o2c-data');
@@ -128,7 +145,7 @@ async function loadDataset(config) {
 
   let totalRows = 0;
   for (const table of tables) {
-    const inserted = await loadTable(table, dataDir);
+    const inserted = await loadTable(table, dataDir, dbConn);
     totalRows += inserted;
   }
 
@@ -136,11 +153,11 @@ async function loadDataset(config) {
   return totalRows;
 }
 
-async function runValidationQueries() {
+async function runValidationQueries(dbConn = db) {
   console.log('\n--- Post-Load Validation ---');
 
   // Check padding
-  const paddingCheck = await db.allAsync(`
+  const paddingCheck = await dbConn.allAsync(`
     SELECT COUNT(*) as unpaddedCount
     FROM billing_document_items
     WHERE LENGTH(referenceSdDocumentItem) < 6
@@ -152,7 +169,7 @@ async function runValidationQueries() {
   }
 
   // Check multi-hop join
-  const joinCheck = await db.getAsync(`
+  const joinCheck = await dbConn.getAsync(`
     SELECT COUNT(*) AS o2c_rows
     FROM sales_order_headers soh
     JOIN outbound_delivery_items odi ON odi.referenceSdDocument = soh.salesOrder

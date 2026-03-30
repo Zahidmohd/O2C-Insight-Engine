@@ -21,6 +21,10 @@ cp .env.example .env
 #   NVIDIA_API_KEY=your_nvidia_key
 #   CEREBRAS_API_KEY=your_cerebras_key
 #   SAMBANOVA_API_KEY=your_sambanova_key
+#
+# For multi-tenant (optional — system works without these):
+#   TURSO_API_TOKEN=your_turso_platform_token
+#   TURSO_ORG_SLUG=your_turso_org_name
 
 # 3. Start server (auto-initializes DB on first run)
 node server.js
@@ -38,25 +42,31 @@ Open `http://localhost:5173` (dev) or `http://localhost:3000` (production build 
 ```
 ┌────────────────────┐     ┌──────────────────────────────────────────────────┐
 │   React UI         │     │              Node.js Backend                     │
-│  (Vite + Cytoscape)│────▶│  queryRoutes.js                                  │
-│                    │     │    ├─ queryService.js (orchestrator)              │
-│  Graph Panel       │◀────│    │   ├─ queryClassifier.js (SQL/RAG/HYBRID)    │
-│  Chat Panel        │     │    │   ├─ complexityClassifier.js (model routing)│
-│  Provider Health   │     │    │   ├─ promptBuilder.js (schema context)      │
-│  Upload Modal      │     │    │   ├─ llmClient.js (5 providers + health)    │
+│  (Vite + Cytoscape)│────▶│  tenantResolver.js (middleware)                   │
+│                    │     │    ├─ req.db (per-tenant Turso or global SQLite) │
+│  Graph Panel       │◀────│    ├─ req.config (per-tenant dataset config)     │
+│  Chat Panel        │     │  queryRoutes.js / documentRoutes.js              │
+│  Provider Health   │     │    ├─ queryService.js (orchestrator)              │
+│  Upload Modal      │     │    │   ├─ queryClassifier.js (SQL/RAG/HYBRID)    │
+│                    │     │    │   ├─ complexityClassifier.js (model routing)│
+│                    │     │    │   ├─ promptBuilder.js (schema context)      │
+│                    │     │    │   ├─ llmClient.js (5 providers + health)    │
 │                    │     │    │   ├─ validator.js (SQL safety)               │
-│                    │     │    │   ├─ sqlExecutor.js (SQLite)                 │
+│                    │     │    │   ├─ sqlExecutor.js (tenant DB)              │
 │                    │     │    │   ├─ graphExtractor.js (nodes/edges)         │
 │                    │     │    │   └─ knowledgeBase.js (RAG context)          │
+│                    │     │    ├─ tenantRoutes.js (create/list/delete tenants)│
 │                    │     │    ├─ onboarding/ (raw data → config pipeline)    │
 │                    │     │    └─ server.js (Express + CORS + security)       │
 └────────────────────┘     └──────────────┬───────────────────────────────────┘
                                           │
-                           ┌──────────────▼──────────────┐
-                           │   SQLite (sap_otc.db)       │
-                           │   19 tables, 18+ indexes    │
-                           │   All columns TEXT           │
-                           └─────────────────────────────┘
+                    ┌─────────────────────┼─────────────────────┐
+                    │                     │                     │
+         ┌──────────▼──────────┐ ┌────────▼────────┐ ┌─────────▼─────────┐
+         │  Global SQLite      │ │  Turso DB        │ │  Turso DB         │
+         │  (dev/tests)        │ │  (Tenant A)      │ │  (Tenant B)       │
+         │  sap_otc.db         │ │  Per-tenant cloud│ │  Per-tenant cloud │
+         └─────────────────────┘ └─────────────────┘ └───────────────────┘
 ```
 
 ### Directory Structure
@@ -64,14 +74,18 @@ Open `http://localhost:5173` (dev) or `http://localhost:3000` (production build 
 ```
 src/
 ├── config/
-│   ├── activeDataset.js     # Active dataset state management
+│   ├── activeDataset.js     # Global + per-tenant dataset config management
 │   ├── datasetConfig.js     # SAP O2C default config (tables, relationships, keywords)
 │   └── datasetValidator.js  # Schema + relationship validation
 ├── db/
-│   ├── connection.js        # SQLite connection with Promise wrappers
-│   ├── init.js              # Schema initialization (dynamic from config)
-│   ├── loader.js            # JSONL → SQLite ingestion with padding transforms
+│   ├── connection.js        # Global SQLite connection (dev/tests fallback)
+│   ├── tursoAdapter.js      # Turso/LibSQL adapter (matches SQLite async API)
+│   ├── tenantRegistry.js    # Tenant → Turso credentials + connection pool
+│   ├── init.js              # Schema initialization (accepts db param)
+│   ├── loader.js            # JSONL → DB ingestion (SQLite + Turso compatible)
 │   └── schema.sql           # 19 tables, indexes, composite keys
+├── middleware/
+│   └── tenantResolver.js    # Resolves X-Tenant-Id → req.db + req.config
 ├── onboarding/
 │   ├── schemaInference.js   # Auto-detect tables, columns, PKs from JSONL/CSV
 │   ├── relationshipInference.js # Suggest joins via column name + value matching
@@ -82,26 +96,29 @@ src/
 │   ├── promptBuilder.js        # Schema context + few-shot examples for LLM
 │   ├── llmClient.js            # 5-provider LLM client with health tracking
 │   ├── validator.js            # SQL safety (blocklist, read-only, no subquery JOINs)
-│   ├── sqlExecutor.js          # Parameterized execution with timing
-│   ├── queryService.js         # Full pipeline orchestrator
+│   ├── sqlExecutor.js          # Parameterized execution (tenant-scoped)
+│   ├── queryService.js         # Full pipeline orchestrator (accepts db + config)
 │   └── graphExtractor.js       # Row → node/edge mapping (O2C + generic)
 ├── rag/
 │   ├── knowledgeBase.js        # Dual-path RAG: vector search + keyword fallback
-│   ├── vectorStore.js          # SQLite document/chunk tables + cosine similarity search
+│   ├── vectorStore.js          # Dual-mode: Turso native vector or in-memory cosine
 │   ├── embeddingService.js     # Local HF embeddings (Xenova/all-MiniLM-L6-v2, 384-dim)
 │   ├── documentExtractor.js    # Text extraction from PDF, DOCX, TXT, MD
 │   ├── chunker.js              # Recursive character text splitter
 │   └── zipExtractor.js         # ZIP archive extraction for dataset uploads
 ├── routes/
 │   ├── queryRoutes.js          # REST API endpoints + multer upload
-│   └── documentRoutes.js       # Document upload/list/delete API
-└── server.js                   # Express server with security headers
+│   ├── documentRoutes.js       # Document upload/list/delete API
+│   └── tenantRoutes.js         # Tenant CRUD + Turso auto-provisioning
+└── server.js                   # Express server with tenant middleware
 frontend/
 ├── src/
 │   ├── App.jsx              # Main component: graph + chat + upload wizard
 │   ├── App.css              # Complete UI styling
 │   └── index.css            # Base reset
 └── package.json
+data/
+└── tenants.json             # Tenant registry (gitignored — contains auth tokens)
 ```
 
 ---
@@ -331,6 +348,54 @@ When a RAG or HYBRID query comes in:
 
 ---
 
+## Multi-Tenancy
+
+The system supports per-tenant database isolation using **Turso** (managed SQLite). Each tenant gets their own cloud database — datasets, documents, and query cache are fully isolated.
+
+### How It Works
+
+```
+New user visits → frontend generates UUID → POST /api/tenants →
+Turso DB provisioned (background) → schema + O2C data loaded →
+tenant ready (queries use Turso DB)
+```
+
+### Tenant Resolution
+
+| Request State | Behavior |
+|---------------|----------|
+| No `X-Tenant-Id` header | Uses global SQLite (dev/tests) |
+| Header + unregistered tenant | Falls back to global SQLite |
+| Header + registered tenant | Uses tenant's Turso DB (strict isolation) |
+
+### Auto-Provisioning
+
+When `TURSO_API_TOKEN` and `TURSO_ORG_SLUG` are configured:
+- New tenants get a Turso database created via Platform API
+- Auth tokens generated automatically
+- Default O2C dataset loaded in background (non-blocking)
+- Response returns immediately — user can query while initialization completes
+
+### Tenant-Scoped Features
+
+| Feature | Isolation |
+|---------|-----------|
+| **Database** | Per-tenant Turso DB (separate cloud instance) |
+| **Dataset config** | Per-tenant config stored in memory |
+| **Response cache** | Cache keys prefixed with tenant ID |
+| **Documents/RAG** | Document chunks stored in tenant's DB |
+| **Dataset upload** | Replaces data in tenant's DB only |
+
+### API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/tenants` | Create tenant (auto-provisions Turso DB) |
+| `GET` | `/api/tenants` | List all tenants |
+| `DELETE` | `/api/tenants/:id` | Delete tenant + destroy Turso DB |
+
+---
+
 ## Frontend Features
 
 - **Dual-Pane Layout** — Graph panel (left, ~70%) + Chat panel (right, 420px)
@@ -339,8 +404,11 @@ When a RAG or HYBRID query comes in:
 - **Interactive Graph** — Click nodes to see tooltip with all properties; drag tooltips anywhere
 - **Dynamic Welcome Examples** — Clickable example queries based on active dataset
 - **Provider Health Indicator** — Real-time status dot showing how many AI providers are healthy
+- **Progressive Disclosure** — Clean chat by default; "View details" expands query plan, performance metrics, and data sources
 - **Query Metadata Badges** — Color-coded badges for query type (SQL/RAG/HYBRID), complexity (SIMPLE/MODERATE/COMPLEX), execution plan (LLM/RULE_BASED/FALLBACK), and confidence level
+- **Context Line** — "Based on X records from your dataset" / "From knowledge base"
 - **Suggestion Chips** — When an invalid ID is entered or all LLMs fail, clickable alternatives are shown
+- **Auto-Tenant Provisioning** — First visit auto-creates a tenant; no signup required
 - **Dataset Upload Wizard** — Three-tab modal: config upload, raw data onboarding (with ZIP support), and document management
 - **Document RAG Upload** — Upload PDF/DOCX/TXT/MD documents to enhance the knowledge base; view and delete uploaded documents
 - **Show SQL Toggle** — Developer mode to see generated SQL
@@ -376,15 +444,27 @@ Returns real-time health status for all 5 LLM providers: scores, remaining reque
 {
   "success": true,
   "requestId": "uuid",
+  "traceId": "uuid",
   "dataset": "sap_o2c",
   "queryType": "SQL",
   "complexity": "COMPLEX",
-  "queryPlan": "LLM",
+  "executionPlan": "LLM",
+  "queryPlan": {
+    "type": "MULTI_HOP_TRACE",
+    "tablesUsed": ["Sales Order", "Billing Document", "Journal Entry (AR)", "Payment (AR)"],
+    "joinPath": [
+      { "from": "sales_order_headers.salesOrder", "to": "outbound_delivery_items.referenceSdDocument", "label": "FULFILLED_BY", "joinType": "INNER" }
+    ],
+    "reasoning": "Traversed 4 relationship(s) across 7 table(s): FULFILLED_BY → BILLED_AS → POSTED_AS → CLEARED_BY"
+  },
   "confidence": 1.0,
   "confidenceLabel": "High",
   "confidenceReasons": ["Valid SQL generated", "No fallback used", "Non-empty results (2 rows)"],
+  "dataConfidence": { "level": "HIGH", "reason": "Multi-hop query across 4 joins — all stages connected" },
+  "metrics": { "totalTimeMs": 12829, "sqlTimeMs": 34.12, "llmTimeMs": 12794.88 },
+  "resultStatus": null,
   "rowCount": 2,
-  "executionTimeMs": 2.90,
+  "executionTimeMs": 34.12,
   "nlAnswer": "Billing document 90504204 traces back to sales order...",
   "summary": "...",
   "sql": "SELECT ...",
@@ -418,6 +498,15 @@ List all uploaded documents with chunk counts and metadata.
 ### DELETE /api/documents/:id
 Delete a document and all its chunks from the vector store.
 
+### POST /api/tenants
+Create a new tenant. If `TURSO_API_TOKEN` is configured, auto-provisions a Turso cloud database. Otherwise requires `tursoUrl` + `authToken` in the request body. Database initialization runs in background — user can query immediately via global fallback.
+
+### GET /api/tenants
+List all registered tenants with initialization status.
+
+### DELETE /api/tenants/:id
+Delete a tenant and destroy their Turso database (if Turso API is configured).
+
 ---
 
 ## Dataset
@@ -447,10 +536,11 @@ All responses are **grounded in executed SQL results**. The system does not gene
 
 ## Observability
 
-Every query is assigned a unique `requestId` (UUID v4) that appears in:
-- Server console logs (with provider used, model, complexity, SQL, execution time, row count)
-- API response payload
+Every query is assigned a unique `traceId` (UUID v4) that appears in:
+- Server console logs (with tenant, provider used, model, complexity, SQL, execution time, row count)
+- API response payload (`traceId` + `requestId`)
 - Provider health tracking (success/failure per provider)
+- Timing metrics (`metrics.totalTimeMs`, `metrics.sqlTimeMs`, `metrics.llmTimeMs`)
 
 Example server log:
 ```
@@ -472,9 +562,10 @@ Example server log:
 
 - **LLM Non-Determinism** — SQL generation may occasionally vary across runs; few-shot examples mitigate but don't fully eliminate this
 - **No Conversation Memory** — Each query is independent; follow-up questions don't have prior context
-- **Single-User SQLite** — Optimized for local development; not designed for high concurrency
+- **Turso Free Tier** — 500 databases, 9GB storage, 25M row reads/month. Sufficient for demos and small-scale usage.
 - **Free-Tier Rate Limits** — Provider availability depends on remaining API quota; complex queries may fail during rate limit windows
 - **Fallback SQL** — Keyword-to-table matching can only produce simple SELECT queries, not multi-hop JOINs
+- **No Authentication** — Tenant isolation uses UUID tokens in localStorage, not real user auth. Anyone with a tenant ID can access that tenant's data.
 
 ---
 

@@ -21,4 +21,17 @@ function setActiveConfig(config) {
     console.log(`[DATASET] Active dataset switched to: ${config.name || 'unnamed'}`);
 }
 
-module.exports = { getActiveConfig, setActiveConfig, defaultConfig };
+// ─── Per-Tenant Config Storage ───────────────────────────────────────────────
+
+const tenantConfigs = new Map();
+
+function getTenantConfig(tenantId) {
+    return tenantConfigs.get(tenantId) || null;
+}
+
+function setTenantConfig(tenantId, config) {
+    tenantConfigs.set(tenantId, config);
+    console.log(`[DATASET] Tenant ${tenantId} config set to: ${config.name || 'unnamed'}`);
+}
+
+module.exports = { getActiveConfig, setActiveConfig, defaultConfig, getTenantConfig, setTenantConfig };

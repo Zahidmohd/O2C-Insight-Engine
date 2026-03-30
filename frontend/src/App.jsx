@@ -3,6 +3,22 @@ import axios from 'axios';
 import cytoscape from 'cytoscape';
 import './App.css';
 
+// Generate persistent tenant ID for multi-tenant isolation
+const tenantId = localStorage.getItem('tenantId') || (() => {
+  const id = crypto.randomUUID();
+  localStorage.setItem('tenantId', id);
+  return id;
+})();
+axios.defaults.headers.common['X-Tenant-Id'] = tenantId;
+
+// Auto-provision tenant on first visit (non-blocking)
+if (!localStorage.getItem('tenantInitialized')) {
+  const API = import.meta.env.VITE_API_URL || '';
+  axios.post(`${API}/api/tenants`, { tenantId }).then(() => {
+    localStorage.setItem('tenantInitialized', 'true');
+  }).catch(() => {}); // 409 (already exists) or any error — silently ignore
+}
+
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -69,16 +85,14 @@ function App() {
 
   const fetchDatasetInfo = () => {
     setDatasetError(false);
-    fetch(`${API_BASE}/api/dataset`)
-      .then(r => r.json())
-      .then(data => setDatasetInfo(data))
+    axios.get(`${API_BASE}/api/dataset`)
+      .then(r => setDatasetInfo(r.data))
       .catch(() => setDatasetError(true));
   };
 
   const fetchProviderHealth = () => {
-    fetch(`${API_BASE}/api/providers`)
-      .then(r => r.json())
-      .then(data => setProviderHealth(data))
+    axios.get(`${API_BASE}/api/providers`)
+      .then(r => setProviderHealth(r.data))
       .catch(() => {});
   };
 
@@ -221,10 +235,9 @@ function App() {
   };
 
   const fetchDocuments = () => {
-    fetch(`${API_BASE}/api/documents`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) setDocuments(data.documents || []);
+    axios.get(`${API_BASE}/api/documents`)
+      .then(r => {
+        if (r.data.success) setDocuments(r.data.documents || []);
       })
       .catch(() => {});
   };
@@ -506,7 +519,7 @@ function App() {
 
     try {
       const response = await axios.post(`${API_BASE}/api/query`, { query: currentQuery, includeSql: showSql }, { timeout: 120000, signal: controller.signal });
-      const { success, requestId, dataset, queryType, rowCount, executionTimeMs, graph, reason, resultStatus, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, executionPlan, queryPlan, complexity, truncated, message } = response.data;
+      const { success, requestId, traceId, dataset, queryType, rowCount, executionTimeMs, graph, reason, resultStatus, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, executionPlan, queryPlan, complexity, truncated, message, metrics, dataConfidence } = response.data;
 
       if (success) {
         const info = {
@@ -530,7 +543,10 @@ function App() {
           resultStatus: resultStatus || null,
           complexity: complexity || null,
           truncated: truncated || false,
-          message: message || null
+          message: message || null,
+          traceId: traceId || null,
+          metrics: metrics || null,
+          dataConfidence: dataConfidence || null
         };
         setResultInfo(info);
         setChatHistory(prev => [...prev, { type: 'user', text: currentQuery }, { type: 'agent', info }]);
@@ -1112,7 +1128,9 @@ function App() {
                       </div>
                     )}
 
-                    {/* Metadata badges row */}
+                    {/* ── DEFAULT VIEW: badges + reasoning + context ── */}
+
+                    {/* Full badges row */}
                     {(r.queryType || r.complexity || r.executionPlan) && (
                       <div className="response-badges">
                         {r.queryType && (
@@ -1132,7 +1150,7 @@ function App() {
                       </div>
                     )}
 
-                    {/* Confidence reasons (collapsible feel — subtle) */}
+                    {/* Confidence reasons */}
                     {r.confidenceReasons && r.confidenceReasons.length > 0 && (
                       <div className="confidence-reasons">
                         {r.confidenceReasons.map((reason, ci) => (
@@ -1141,78 +1159,106 @@ function App() {
                       </div>
                     )}
 
+                    {/* Query plan reasoning line */}
+                    {r.queryPlan && r.queryPlan.reasoning && (
+                      <div className="confidence-reasons">
+                        <span>&#9654; {r.queryPlan.reasoning}</span>
+                      </div>
+                    )}
+
+                    {/* Context line */}
+                    {r.rowCount > 0 && (
+                      <div className="response-context">Based on {r.rowCount} record{r.rowCount !== 1 ? 's' : ''} from your dataset</div>
+                    )}
+                    {r.queryType === 'RAG' && (
+                      <div className="response-context">From knowledge base</div>
+                    )}
+
                     {/* Truncation warning */}
                     {r.truncated && (
                       <div className="chat-info">Showing first 100 results (truncated)</div>
                     )}
 
-                    {/* Query Plan + Explanation card */}
-                    {(r.explanation || r.queryPlan) && (
-                      <div className="result-card">
-                        <div className="result-card-title">How this was answered</div>
-                        {r.explanation && r.explanation.explanationText && (
-                          <div className="explanation-summary">{r.explanation.explanationText}</div>
-                        )}
-                        {r.queryPlan && r.queryPlan.type && (
-                          <div className="result-row">
-                            <span className="result-label">Type</span>
-                            <span className="result-value">{r.queryPlan.type.replace(/_/g, ' ')}</span>
-                          </div>
-                        )}
-                        {r.queryPlan && r.queryPlan.tablesUsed && r.queryPlan.tablesUsed.length > 0 && (
-                          <div className="result-row">
-                            <span className="result-label">Tables</span>
-                            <span className="result-value">{r.queryPlan.tablesUsed.join(' → ')}</span>
-                          </div>
-                        )}
-                        {r.queryPlan && r.queryPlan.joinPath && r.queryPlan.joinPath.length > 0 && (
-                          <div className="result-row">
-                            <span className="result-label">Join Path</span>
-                            <span className="result-value">{r.queryPlan.joinPath.map(j => j.label).join(' → ')}</span>
-                          </div>
-                        )}
-                        {r.explanation && (
-                          <>
-                            <div className="result-row">
-                              <span className="result-label">Intent</span>
-                              <span className="result-value">{r.explanation.intent}</span>
-                            </div>
-                            <div className="result-row">
-                              <span className="result-label">Strategy</span>
-                              <span className="result-value">{r.explanation.strategy}</span>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    )}
+                    {/* ── EXPANDABLE DETAILS (progressive disclosure) ── */}
+                    {(r.explanation || r.queryPlan || r.metrics || r.sql) && (
+                      <details className="response-details">
+                        <summary className="details-toggle">View details</summary>
 
-                    {/* Generated SQL */}
-                    {(r.sql || r.generatedSql) && (
-                      <div className="result-card">
-                        <div className="result-card-title">Generated SQL</div>
-                        <pre className="sql-block">{r.sql || r.generatedSql}</pre>
-                      </div>
-                    )}
-
-                    {/* Execution details — only for data-returning queries */}
-                    {r.rowCount > 0 && (
-                      <div className="result-card">
-                        <div className="result-card-title">Execution Details</div>
-                        <div className="result-row">
-                          <span className="result-label">Rows</span>
-                          <span className="result-value">{r.rowCount}</span>
-                        </div>
-                        <div className="result-row">
-                          <span className="result-label">Time</span>
-                          <span className="result-value">{r.executionTimeMs} ms</span>
-                        </div>
-                        {r.dataset && (
-                          <div className="result-row">
-                            <span className="result-label">Dataset</span>
-                            <span className="result-value">{r.dataset}</span>
+                        {/* How this was answered */}
+                        {(r.explanation || r.queryPlan) && (
+                          <div className="result-card">
+                            <div className="result-card-title">How this was answered</div>
+                            {r.explanation && r.explanation.explanationText && (
+                              <div className="explanation-summary">{r.explanation.explanationText}</div>
+                            )}
+                            {r.queryPlan && r.queryPlan.type && (
+                              <div className="result-row">
+                                <span className="result-label">Analysis Type</span>
+                                <span className="result-value">{r.queryPlan.type.replace(/_/g, ' ')}</span>
+                              </div>
+                            )}
+                            {r.queryPlan && r.queryPlan.tablesUsed && r.queryPlan.tablesUsed.length > 0 && (
+                              <div className="result-row">
+                                <span className="result-label">Data Sources</span>
+                                <span className="result-value">{r.queryPlan.tablesUsed.join(' \u2192 ')}</span>
+                              </div>
+                            )}
+                            {r.queryPlan && r.queryPlan.joinPath && r.queryPlan.joinPath.length > 0 && (
+                              <div className="result-row">
+                                <span className="result-label">Data Flow</span>
+                                <span className="result-value">{r.queryPlan.joinPath.map(j => j.label).join(' \u2192 ')}</span>
+                              </div>
+                            )}
+                            {r.explanation && (
+                              <div className="result-row">
+                                <span className="result-label">Approach</span>
+                                <span className="result-value">{r.explanation.strategy}</span>
+                              </div>
+                            )}
                           </div>
                         )}
-                      </div>
+
+                        {/* Execution details */}
+                        {r.rowCount > 0 && (
+                          <div className="result-card">
+                            <div className="result-card-title">Performance</div>
+                            <div className="result-row">
+                              <span className="result-label">Records</span>
+                              <span className="result-value">{r.rowCount}</span>
+                            </div>
+                            {r.metrics && (
+                              <>
+                                <div className="result-row">
+                                  <span className="result-label">Total Time</span>
+                                  <span className="result-value">{(r.metrics.totalTimeMs / 1000).toFixed(2)}s</span>
+                                </div>
+                                <div className="result-row">
+                                  <span className="result-label">Query Time</span>
+                                  <span className="result-value">{(r.metrics.sqlTimeMs / 1000).toFixed(2)}s</span>
+                                </div>
+                                <div className="result-row">
+                                  <span className="result-label">Processing Time</span>
+                                  <span className="result-value">{(r.metrics.llmTimeMs / 1000).toFixed(2)}s</span>
+                                </div>
+                              </>
+                            )}
+                            {r.dataConfidence && (
+                              <div className="result-row">
+                                <span className="result-label">Data Quality</span>
+                                <span className="result-value">{r.dataConfidence.level} — {r.dataConfidence.reason}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Generated SQL */}
+                        {(r.sql || r.generatedSql) && (
+                          <div className="result-card">
+                            <div className="result-card-title">Generated SQL</div>
+                            <pre className="sql-block">{r.sql || r.generatedSql}</pre>
+                          </div>
+                        )}
+                      </details>
                     )}
                   </div>
                 );

@@ -34,14 +34,13 @@ function normalizeQuery(query) {
         .join(' ');
 }
 
-function cacheKey(query, includeSql) {
-    const config = getActiveConfig();
-    const dsKey = `${config.name}:${config.version || 'default'}`;
+function cacheKey(query, includeSql, tenantId, config) {
+    const dsKey = `${tenantId || 'global'}:${config.name}:${config.version || 'default'}`;
     return `${dsKey}:${normalizeQuery(query)}${includeSql ? ':sql' : ''}`;
 }
 
-function getCached(query, includeSql) {
-    const key = cacheKey(query, includeSql);
+function getCached(query, includeSql, tenantId, config) {
+    const key = cacheKey(query, includeSql, tenantId, config);
     const entry = responseCache.get(key);
     if (!entry) return null;
     if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
@@ -51,8 +50,8 @@ function getCached(query, includeSql) {
     return entry.response;
 }
 
-function setCached(query, includeSql, response) {
-    const key = cacheKey(query, includeSql);
+function setCached(query, includeSql, response, tenantId, config) {
+    const key = cacheKey(query, includeSql, tenantId, config);
     if (responseCache.size >= MAX_CACHE_SIZE) {
         const oldestKey = responseCache.keys().next().value;
         responseCache.delete(oldestKey);
@@ -113,7 +112,7 @@ function isDomainQuery(query) {
  * Matches patterns like "show all X", "list X", "get X" where X is a known table.
  * Returns a full response object on match, or null to fall through to LLM.
  */
-function tryRuleBasedQuery(query, tag, options) {
+async function tryRuleBasedQuery(query, tag, options) {
     const lower = query.toLowerCase().trim();
 
     // Only handle simple show/list/get/find patterns without JOINs or complex logic
@@ -147,7 +146,7 @@ function tryRuleBasedQuery(query, tag, options) {
     console.log(`${tag} [RULE_BASED] Simple listing query → ${sql}`);
 
     // Execute synchronously-style via the same pipeline
-    const result = require('./sqlExecutor').executeQuerySync(sql);
+    const result = await require('./sqlExecutor').executeQueryDirect(sql);
     if (!result || !result.success) return null; // Fall through to LLM on DB error
 
     const response = formatResponse(result, options.includeSql ? sql : undefined);
@@ -542,12 +541,15 @@ function buildSuggestedQueries() {
 /**
  * Orchestrates the full Natural Language -> SQL -> Result pipeline
  */
-async function processQuery(naturalLanguageQuery, requestId = 'dev-local', options = {}) {
+async function processQuery(naturalLanguageQuery, requestId = 'dev-local', options = {}, dbConn = null, configOverride = null) {
+    const dbInstance = dbConn || require('../db/connection');
+    const activeConfig = configOverride || getActiveConfig();
     const tag = `[API-${requestId}]`;
     console.log(`\n${tag} [USER_QUERY] "${naturalLanguageQuery}"`);
 
     // 0a. Cache check — skip LLM entirely for repeated identical queries
-    const cached = getCached(naturalLanguageQuery, options.includeSql);
+    const tenantId = options.tenantId || null;
+    const cached = getCached(naturalLanguageQuery, options.includeSql, tenantId, activeConfig);
     if (cached) {
         console.log(`${tag} [CACHE_HIT] Returning cached response.`);
         return cached;
@@ -559,11 +561,11 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
     // INVALID path: query has no domain relevance
     if (queryType === 'INVALID') {
-        const dsName = getActiveConfig().displayName || getActiveConfig().name;
+        const dsName = activeConfig.displayName || activeConfig.name;
         console.warn(`${tag} [VALIDATION] Domain check failed at classifier — no domain keywords found.`);
         return {
             success: false,
-            dataset: getActiveConfig().name,
+            dataset: activeConfig.name,
             error: { message: `This system is designed to answer questions related to the ${dsName} dataset only.`, type: 'VALIDATION_ERROR' },
             query: naturalLanguageQuery
         };
@@ -577,16 +579,16 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             console.warn(`${tag} [VALIDATION] RAG domain check failed — off-topic query blocked.`);
             return {
                 success: false,
-                dataset: getActiveConfig().name,
+                dataset: activeConfig.name,
                 error: { message: ragDomainCheck.message, type: 'VALIDATION_ERROR' },
                 query: naturalLanguageQuery
             };
         }
-        const context = await retrieveContext(naturalLanguageQuery);
+        const context = await retrieveContext(naturalLanguageQuery, dbInstance);
         console.log(`${tag} [RESULT] RAG response dispatched (rowCount: 0).`);
         return {
             success: true,
-            dataset: getActiveConfig().name,
+            dataset: activeConfig.name,
             queryType: 'RAG',
             reason: 'RAG_RESPONSE',
             nlAnswer: context || 'No specific context found for this topic in the knowledge base.',
@@ -614,7 +616,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         console.warn(`${tag} [VALIDATION] Intent check failed — no recognized business action.`);
         return {
             success: false,
-            dataset: getActiveConfig().name,
+            dataset: activeConfig.name,
             error: { message: intentCheck.message, type: 'VALIDATION_ERROR' },
             query: naturalLanguageQuery
         };
@@ -625,17 +627,17 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         console.warn(`${tag} [VALIDATION] Domain check failed — query outside O2C scope.`);
         return {
             success: false,
-            dataset: getActiveConfig().name,
+            dataset: activeConfig.name,
             error: { message: domainCheck.message, type: 'VALIDATION_ERROR' },
             query: naturalLanguageQuery
         };
     }
     
     // 2. Rule-based bypass for simple single-table queries (saves LLM cost)
-    const ruleBasedResult = tryRuleBasedQuery(naturalLanguageQuery, tag, options);
+    const ruleBasedResult = await tryRuleBasedQuery(naturalLanguageQuery, tag, options);
     if (ruleBasedResult) {
         console.log(`${tag} [RULE_BASED] Handled without LLM.`);
-        setCached(naturalLanguageQuery, options.includeSql, ruleBasedResult);
+        setCached(naturalLanguageQuery, options.includeSql, ruleBasedResult, tenantId, activeConfig);
         return ruleBasedResult;
     }
 
@@ -668,11 +670,11 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             console.log(`${tag} [FALLBACK_SQL] Generated: ${fallbackSql}`);
             try {
                 validateSql(fallbackSql);
-                const fbResult = await withTimeout(executeQuery(fallbackSql), 5000, 'Fallback SQL Execution');
+                const fbResult = await withTimeout(executeQuery(fallbackSql, [], dbInstance), 5000, 'Fallback SQL Execution');
                 if (fbResult.success && fbResult.rowCount > 0) {
                     console.log(`${tag} [FALLBACK_SQL] Success — ${fbResult.rowCount} rows.`);
                     const response = formatResponse(fbResult, options.includeSql ? fallbackSql : undefined);
-                    response.dataset = getActiveConfig().name;
+                    response.dataset = activeConfig.name;
                     response.queryType = 'SQL';
                     response.reason = fbResult.rowCount > 0 ? 'DATA_FOUND' : 'NO_DATA';
                     response.explanation = buildExplanation(naturalLanguageQuery, fallbackSql);
@@ -682,7 +684,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                     response.queryPlan = 'FALLBACK_SQL';
                     response.complexity = complexity;
                     response.nlAnswer = null;
-                    setCached(naturalLanguageQuery, options.includeSql, response);
+                    setCached(naturalLanguageQuery, options.includeSql, response, tenantId, activeConfig);
                     return response;
                 }
             } catch (fbErr) {
@@ -692,7 +694,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
         const fallbackResponse = {
             success: true,
-            dataset: getActiveConfig().name,
+            dataset: activeConfig.name,
             queryType: 'FALLBACK',
             summary: 'All AI providers are temporarily unavailable. Please try again shortly.',
             reason: 'LLM_UNAVAILABLE',
@@ -717,7 +719,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             nlAnswer: null,
             suggestions: buildSuggestedQueries()
         };
-        setCached(naturalLanguageQuery, options.includeSql, fallbackResponse);
+        setCached(naturalLanguageQuery, options.includeSql, fallbackResponse, tenantId, activeConfig);
         return fallbackResponse;
     }
 
@@ -728,7 +730,6 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         let explicitCustChecked = false;
         let extractedCustId = null;
 
-        const activeConfig = getActiveConfig();
         const idChecks = activeConfig.name === 'sap_o2c'
             ? [
                 { regex: /billingDocument\s*(?:=|LIKE)\s*['"]?(\d+)['"]?/i, table: 'billing_document_headers', column: 'billingDocument', label: 'Billing document' },
@@ -745,21 +746,21 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 console.log(`${tag} [VALIDATION] Checking existence of ${check.label} '${extractedId}'...`);
                 
                 const checkResult = await withTimeout(
-                    executeQuery(`SELECT ${check.column} FROM ${check.table} WHERE ${check.column} = ? LIMIT 1`, [extractedId]),
+                    executeQuery(`SELECT ${check.column} FROM ${check.table} WHERE ${check.column} = ? LIMIT 1`, [extractedId], dbInstance),
                     2000, 'DB Existence Check'
                 );
                 
                 if (checkResult.success && checkResult.rowCount === 0) {
                     console.log(`${tag} [VALIDATION] Invalid ${check.label} ID: ${extractedId}`);
                     const sampleResult = await withTimeout(
-                        executeQuery(`SELECT ${check.column} FROM ${check.table} ORDER BY RANDOM() LIMIT 5`),
+                        executeQuery(`SELECT ${check.column} FROM ${check.table} ORDER BY RANDOM() LIMIT 5`, [], dbInstance),
                         2000, 'DB Samples Fetch'
                     );
                     const suggestions = sampleResult.success ? sampleResult.rows.map(r => r[check.column]) : [];
                     
                     return {
                         success: true,
-                        dataset: getActiveConfig().name,
+                        dataset: activeConfig.name,
                         queryType,
                         summary: `${check.label} '${extractedId}' was not found in the dataset.`,
                         reason: 'INVALID_ID',
@@ -795,7 +796,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
             console.log(`${tag} [VALIDATION] Checking existence of customer '${extractedCustId}'...`);
 
             const custCheckResult = await withTimeout(
-                executeQuery(`SELECT salesOrder FROM sales_order_headers WHERE soldToParty = ? LIMIT 1`, [extractedCustId]),
+                executeQuery(`SELECT salesOrder FROM sales_order_headers WHERE soldToParty = ? LIMIT 1`, [extractedCustId], dbInstance),
                 2000, 'DB Customer Check'
             );
 
@@ -803,7 +804,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                 console.log(`${tag} [VALIDATION] No records for customer '${extractedCustId}'.`);
                 return {
                     success: true,
-                    dataset: getActiveConfig().name,
+                    dataset: activeConfig.name,
                     queryType,
                     summary: `No records found for customer '${extractedCustId}' in the dataset.`,
                     reason: 'INVALID_ID',
@@ -826,13 +827,13 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         }
 
         // 5. Execute against SQLite with execution timeout
-        let dbResult = await withTimeout(executeQuery(rawSql), 5000, 'Database Execution');
+        let dbResult = await withTimeout(executeQuery(rawSql, [], dbInstance), 5000, 'Database Execution');
 
         if (!dbResult.success) {
              console.error(`${tag} [EXECUTION] DB error:`, dbResult.error);
              return {
                  success: false,
-                 dataset: getActiveConfig().name,
+                 dataset: activeConfig.name,
                  error: { message: dbResult.error, type: 'DB_ERROR' },
                  query: naturalLanguageQuery
              };
@@ -882,7 +883,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
                     relaxedSql += ' LIMIT 100';
                 }
 
-                const relaxedDbResult = await withTimeout(executeQuery(relaxedSql), 5000, 'Database Execution Fallback');
+                const relaxedDbResult = await withTimeout(executeQuery(relaxedSql, [], dbInstance), 5000, 'Database Execution Fallback');
                 if (relaxedDbResult.success && relaxedDbResult.rowCount > 0) {
                     console.log(`${tag} [FALLBACK_USED] Success — ${relaxedDbResult.rowCount} rows recovered via relaxed joins.`);
                     dbResult = relaxedDbResult;
@@ -930,7 +931,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
             return {
                 success: true,
-                dataset: getActiveConfig().name,
+                dataset: activeConfig.name,
                 queryType,
                 summary: emptySummary,
                 resultStatus,
@@ -955,7 +956,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         // null is handled gracefully by generateNLAnswer — no degradation on KB miss.
         let ragContext = null;
         if (queryType === 'HYBRID') {
-            ragContext = await retrieveContext(naturalLanguageQuery);
+            ragContext = await retrieveContext(naturalLanguageQuery, dbInstance);
             console.log(`${tag} [QUERY_TYPE] HYBRID — KB context ${ragContext ? 'found' : 'not found, proceeding with SQL only'}.`);
         }
 
@@ -963,7 +964,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         let nlAnswer = null;
         try {
             nlAnswer = await withTimeout(
-                generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount, ragContext, complexity, getActiveConfig().displayName || getActiveConfig().name),
+                generateNLAnswer(naturalLanguageQuery, dbResult.rows, dbResult.rowCount, ragContext, complexity, activeConfig.displayName || activeConfig.name),
                 50000,
                 'NL Answer Generation'
             );
@@ -1077,7 +1078,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         finalResponse.confidenceLabel = confidenceResult.label;
         finalResponse.confidenceReasons = confidenceResult.reasons;
         finalResponse.queryType = queryType; // "SQL" or "HYBRID"
-        finalResponse.dataset = getActiveConfig().name;
+        finalResponse.dataset = activeConfig.name;
         finalResponse.executionPlan = fallbackApplied ? 'FALLBACK' : 'LLM';
         finalResponse.queryPlan = buildQueryPlan(rawSql, finalResponse.explanation);
         finalResponse.complexity = complexity;
@@ -1094,7 +1095,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         console.log(`${tag} [RESULT] rowCount=${finalResponse.rowCount} | confidence=${finalResponse.confidence} | execTime=${finalResponse.executionTimeMs}ms${fallbackApplied ? ' | fallback=true' : ''}`);
 
         // Cache successful responses only
-        if (finalResponse.success) setCached(naturalLanguageQuery, options.includeSql, finalResponse);
+        if (finalResponse.success) setCached(naturalLanguageQuery, options.includeSql, finalResponse, tenantId, activeConfig);
 
         return finalResponse;
 
@@ -1102,7 +1103,7 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
          console.error(`${tag} [EXECUTION] Pipeline failure: ${e.message}`);
          return {
              success: false,
-             dataset: getActiveConfig().name,
+             dataset: activeConfig.name,
              error: { message: e.message, type: 'EXECUTION_ERROR' },
              query: naturalLanguageQuery
          };
@@ -1146,9 +1147,21 @@ if (require.main === module) {
 /**
  * Clears the response cache. Called on dataset switch to prevent stale results.
  */
-function clearCache() {
-    responseCache.clear();
-    console.log('[CACHE] Response cache cleared.');
+function clearCache(tenantId = null) {
+    if (!tenantId) {
+        responseCache.clear();
+        console.log('[CACHE] Response cache cleared (all tenants).');
+    } else {
+        const prefix = `${tenantId}:`;
+        let cleared = 0;
+        for (const key of responseCache.keys()) {
+            if (key.startsWith(prefix)) {
+                responseCache.delete(key);
+                cleared++;
+            }
+        }
+        console.log(`[CACHE] Cleared ${cleared} cached entries for tenant: ${tenantId}`);
+    }
 }
 
 module.exports = {
