@@ -213,13 +213,35 @@ function recordsToJSONL(records) {
  * @param {Array<{filename: string, content: string}>} files
  * @returns {{ tables: Array<{name, displayName, columns, primaryKey, recordCount, records}> }}
  */
+/**
+ * Strips partition suffixes from table names so split files merge into one table.
+ * Examples:
+ *   "sales_order_items_part_20251119_133430_214" → "sales_order_items"
+ *   "sap_o2c_data_billing_document_headers_part_20251119_133433_936" → "billing_document_headers"
+ */
+function stripPartitionSuffix(name) {
+    // Remove common prefixes like "sap_o2c_data_"
+    let clean = name.replace(/^sap_o2c_data_/i, '');
+
+    // Remove partition suffixes: _part_YYYYMMDD_HHMMSS_NNN or _part_NUMBER
+    clean = clean.replace(/_part_\d[\d_]*$/i, '');
+
+    // Remove trailing timestamps: _20251119_133430_214
+    clean = clean.replace(/_\d{8}_\d{5,}_\d+$/, '');
+
+    // Remove trailing numeric-only suffixes (e.g., _214, _936)
+    clean = clean.replace(/_\d{2,}$/, '');
+
+    return clean || name;
+}
+
 function inferSchema(files) {
     if (!files || files.length === 0) {
         throw new Error('No files provided for schema inference.');
     }
 
-    const tables = [];
-    const tableNames = new Set();
+    // Phase 1: Parse all files and group by column signature (merge partitions)
+    const mergeMap = new Map(); // columnKey → { name, records[], columns }
 
     for (const file of files) {
         if (!file.content || !file.content.trim()) {
@@ -233,7 +255,34 @@ function inferSchema(files) {
             throw new Error(`File "${file.filename}" contains no valid records.`);
         }
 
-        let tableName = inferTableName(file.filename);
+        const columns = inferColumns(records);
+        if (!columns || columns.length === 0) {
+            throw new Error(`File "${file.filename}" has no detectable columns.`);
+        }
+
+        // Column signature: sorted column names joined — same signature = same table
+        const colKey = [...columns].sort().join('|');
+        const baseName = stripPartitionSuffix(inferTableName(file.filename));
+
+        if (mergeMap.has(colKey)) {
+            // Merge records into existing table
+            const existing = mergeMap.get(colKey);
+            existing.records.push(...records);
+            // Keep the shorter/cleaner name
+            if (baseName.length < existing.name.length) {
+                existing.name = baseName;
+            }
+        } else {
+            mergeMap.set(colKey, { name: baseName, columns, records });
+        }
+    }
+
+    // Phase 2: Build table objects from merged groups
+    const tables = [];
+    const tableNames = new Set();
+
+    for (const group of mergeMap.values()) {
+        let tableName = group.name;
 
         // Deduplicate table names
         if (tableNames.has(tableName)) {
@@ -243,22 +292,19 @@ function inferSchema(files) {
         }
         tableNames.add(tableName);
 
-        const columns = inferColumns(records);
-        if (!columns || columns.length === 0) {
-            throw new Error(`File "${file.filename}" has no detectable columns.`);
-        }
-
-        const primaryKey = detectPrimaryKeyCandidates(records, columns);
+        const primaryKey = detectPrimaryKeyCandidates(group.records, group.columns);
 
         tables.push({
             name: tableName,
             displayName: generateDisplayName(tableName),
-            columns,
+            columns: group.columns,
             primaryKey,
-            recordCount: records.length,
-            records // kept for relationship inference — not sent to client
+            recordCount: group.records.length,
+            records: group.records
         });
     }
+
+    console.log(`[SCHEMA] Inferred ${tables.length} tables from ${files.length} files${files.length > tables.length ? ` (merged ${files.length - tables.length} partitions)` : ''}.`);
 
     return { tables };
 }

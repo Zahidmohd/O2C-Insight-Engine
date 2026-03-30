@@ -923,6 +923,7 @@ function App() {
                   ) : (
                     <div className="no-documents">No documents uploaded yet. Upload documents to enable vector-powered RAG answers.</div>
                   )}
+                  <button className="btn-primary" style={{ marginTop: 12 }} onClick={() => setShowUploadModal(false)}>Done</button>
                 </div>
               )}
 
