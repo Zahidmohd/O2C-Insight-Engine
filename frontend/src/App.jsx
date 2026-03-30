@@ -951,9 +951,10 @@ function App() {
               )}
               {resultInfo && !resultInfo.hasNodes && ['NO_FLOW', 'INCOMPLETE_FLOW', 'NO_DATA', 'NO_GAPS'].includes(resultInfo.reason) && (
                 <div className={resultInfo.resultStatus === 'NO_GAPS_FOUND' ? 'empty-info' : 'empty-warn'}>
-                  {resultInfo.resultStatus === 'INCOMPLETE_FLOW' ? 'Incomplete document flow — some stages are missing' :
-                   resultInfo.resultStatus === 'NO_GAPS_FOUND' ? 'No gaps detected — all flows are complete' :
-                   'No connected flow found'}
+                  {{ NO_GAPS_FOUND: 'No gaps detected — all flows are complete',
+                     INCOMPLETE_FLOW: 'Incomplete document flow — some stages are missing',
+                     NO_MATCH: 'No matching data found'
+                  }[resultInfo.resultStatus] || 'No connected flow found'}
                 </div>
               )}
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'AGGREGATION' && (
