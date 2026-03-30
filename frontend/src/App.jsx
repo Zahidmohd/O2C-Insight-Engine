@@ -1141,41 +1141,45 @@ function App() {
                       </div>
                     )}
 
-                    {/* Query plan reasoning */}
-                    {r.queryPlan && r.queryPlan.reasoning && (
-                      <div className="confidence-reasons">
-                        <span>&#9654; {r.queryPlan.reasoning}</span>
-                      </div>
-                    )}
-
                     {/* Truncation warning */}
                     {r.truncated && (
                       <div className="chat-info">Showing first 100 results (truncated)</div>
                     )}
 
-                    {/* Explanation card */}
-                    {r.explanation && (
+                    {/* Query Plan + Explanation card */}
+                    {(r.explanation || r.queryPlan) && (
                       <div className="result-card">
-                        <div className="result-card-title">How this was answered</div>
-                        {r.explanation.explanationText && (
-                          <div className="explanation-summary">{r.explanation.explanationText}</div>
-                        )}
-                        <div className="result-row">
-                          <span className="result-label">Intent</span>
-                          <span className="result-value">{r.explanation.intent}</span>
-                        </div>
-                        {r.explanation.entities && r.explanation.entities.length > 0 && (
+                        <div className="result-card-title">Query Plan</div>
+                        {r.queryPlan && r.queryPlan.type && (
                           <div className="result-row">
-                            <span className="result-label">Entities</span>
-                            <span className="result-value">
-                              {r.explanation.entities.map(e => e.replace(/_/g, ' ')).join(', ')}
-                            </span>
+                            <span className="result-label">Type</span>
+                            <span className="result-value">{r.queryPlan.type.replace(/_/g, ' ')}</span>
                           </div>
                         )}
-                        <div className="result-row">
-                          <span className="result-label">Strategy</span>
-                          <span className="result-value">{r.explanation.strategy}</span>
-                        </div>
+                        {r.queryPlan && r.queryPlan.tablesUsed && r.queryPlan.tablesUsed.length > 0 && (
+                          <div className="result-row">
+                            <span className="result-label">Tables</span>
+                            <span className="result-value">{r.queryPlan.tablesUsed.join(' → ')}</span>
+                          </div>
+                        )}
+                        {r.queryPlan && r.queryPlan.joinPath && r.queryPlan.joinPath.length > 0 && (
+                          <div className="result-row">
+                            <span className="result-label">Join Path</span>
+                            <span className="result-value">{r.queryPlan.joinPath.map(j => j.label).join(' → ')}</span>
+                          </div>
+                        )}
+                        {r.explanation && (
+                          <>
+                            <div className="result-row">
+                              <span className="result-label">Intent</span>
+                              <span className="result-value">{r.explanation.intent}</span>
+                            </div>
+                            <div className="result-row">
+                              <span className="result-label">Strategy</span>
+                              <span className="result-value">{r.explanation.strategy}</span>
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
 
