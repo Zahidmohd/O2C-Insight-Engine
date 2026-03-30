@@ -284,6 +284,21 @@ The onboarding pipeline uses deterministic heuristics (no LLM) for schema and re
 - **Relationship scoring:** Column name matching (+0.5), suffix pattern matching (+0.3), value overlap sampling (+0.5)
 - **Cardinality inference:** 1:1, 1:N, N:1, N:M from value distribution analysis
 
+### Dynamic Adaptation
+
+The entire query pipeline adapts automatically to any uploaded dataset:
+
+| Component | How it adapts |
+|-----------|---------------|
+| **SQL prompts** | Built from active config (tables, columns, relationships, keywords) |
+| **Query classification** | Uses `domainKeywords` from config (auto-generated from table/column names) |
+| **Complexity routing** | Generic regex patterns, no dataset-specific logic |
+| **Graph extraction** | Reads relationships from config to build nodes/edges dynamically |
+| **NL answers** | LLM prompt references active dataset name, not hardcoded |
+| **ID validation** | Checks primary keys from config tables |
+| **Suggested queries** | Auto-generated from table display names |
+| **RAG context** | Vector search from uploaded documents; keyword KB only for default O2C dataset |
+
 ---
 
 ## Document RAG Pipeline

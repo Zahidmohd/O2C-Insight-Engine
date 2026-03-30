@@ -175,6 +175,13 @@ body, html {
   flex: 1;
   display: flex;
   flex-direction: column;
+  height: 260px;
+  overflow-y: auto;
+}
+
+.modal-wide .modal-body {
+  height: auto;
+  max-height: 70vh;
 }
 
 .modal-description {
