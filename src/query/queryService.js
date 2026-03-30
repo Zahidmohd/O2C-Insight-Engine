@@ -339,7 +339,7 @@ function buildExplanation(query, sql) {
             entity: (t.displayName || t.name.replace(/_/g, ' ')).toLowerCase()
         }));
     const entitiesFromSql = tableEntityMap
-        .filter(m => sqlLower.includes(m.table))
+        .filter(m => new RegExp(`\\b${m.table}\\b`, 'i').test(sql || ''))
         .map(m => m.entity);
 
     // Merge, deduplicate, preserve order (query-mentioned first)
@@ -377,37 +377,46 @@ function buildQueryPlan(sql, explanation) {
         return { type: 'UNKNOWN', tablesUsed: [], joinPath: [], reasoning: 'No SQL available.' };
     }
 
-    const sqlUpper = sql.toUpperCase();
+    // Helper: word-boundary match prevents false positives (e.g., "products" inside "product_storage_locations")
+    const sqlHasTable = (tableName) => new RegExp(`\\b${tableName}\\b`, 'i').test(sql);
 
     // 1. Extract tables referenced in SQL (FROM + JOIN clauses)
     const tablesUsed = config.tables
-        .filter(t => sqlUpper.includes(t.name.toUpperCase()))
+        .filter(t => sqlHasTable(t.name))
         .map(t => t.displayName || t.name);
 
-    // 2. Extract join path from config relationships that match tables in the SQL
+    // 2. Detect actual join type from SQL (not config default)
+    const hasLeftJoin = /LEFT\s+JOIN/i.test(sql);
+
+    // 3. Extract join path from config relationships that match tables in the SQL
     const joinPath = config.relationships
         .filter(r => {
             const fromTable = r.from.split('.')[0];
             const toTable = r.to.split('.')[0];
-            return sqlUpper.includes(fromTable.toUpperCase()) && sqlUpper.includes(toTable.toUpperCase());
+            return sqlHasTable(fromTable) && sqlHasTable(toTable);
         })
-        .map(r => ({
-            from: r.from,
-            to: r.to,
-            label: r.label,
-            joinType: r.joinType
-        }));
+        .map(r => {
+            const toTable = r.to.split('.')[0];
+            // Check if THIS specific table is LEFT JOINed in the SQL
+            const tableLeftJoined = new RegExp(`LEFT\\s+JOIN\\s+${toTable}\\b`, 'i').test(sql);
+            return {
+                from: r.from,
+                to: r.to,
+                label: r.label,
+                joinType: tableLeftJoined ? 'LEFT' : 'INNER'
+            };
+        });
 
-    // 3. Classify query plan type
+    // 4. Classify query plan type
     let type = 'SIMPLE_QUERY';
     if (joinPath.length >= 3) type = 'MULTI_HOP_TRACE';
     else if (joinPath.length >= 1) type = 'MULTI_TABLE_JOIN';
     if (/\b(COUNT|SUM|AVG|MIN|MAX)\s*\(/i.test(sql)) type = 'AGGREGATION';
-    if (/IS\s+NULL/i.test(sql) && /LEFT\s+JOIN/i.test(sql)) type = 'GAP_ANALYSIS';
+    if (/IS\s+NULL/i.test(sql) && hasLeftJoin) type = 'GAP_ANALYSIS';
 
-    // 4. Build reasoning from explanation context
+    // 5. Build reasoning from explanation context
     const reasoning = joinPath.length > 0
-        ? `Traversed ${joinPath.length} relationship(s) across ${tablesUsed.length} table(s): ${joinPath.map(j => j.label).join(' → ')}`
+        ? `Traversed ${joinPath.length} relationship(s) across ${tablesUsed.length} table(s): ${joinPath.map(j => j.label).join(' \u2192 ')}`
         : `Direct query against ${tablesUsed.length} table(s): ${tablesUsed.join(', ')}`;
 
     return { type, tablesUsed, joinPath, reasoning };
