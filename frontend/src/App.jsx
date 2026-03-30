@@ -1149,7 +1149,10 @@ function App() {
                     {/* Query Plan + Explanation card */}
                     {(r.explanation || r.queryPlan) && (
                       <div className="result-card">
-                        <div className="result-card-title">Query Plan</div>
+                        <div className="result-card-title">How this was answered</div>
+                        {r.explanation && r.explanation.explanationText && (
+                          <div className="explanation-summary">{r.explanation.explanationText}</div>
+                        )}
                         {r.queryPlan && r.queryPlan.type && (
                           <div className="result-row">
                             <span className="result-label">Type</span>
