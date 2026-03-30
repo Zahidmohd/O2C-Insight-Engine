@@ -555,11 +555,18 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         return cached;
     }
 
-    // 0b. Classify query type — HYBRID checked before RAG to avoid misrouting
-    const queryType = classifyQuery(naturalLanguageQuery);
-    console.log(`${tag} [QUERY_TYPE] ${queryType}`);
+    // 0b. Check if tenant has uploaded documents (enables RAG for non-domain queries)
+    let hasDocuments = false;
+    try {
+        const { getChunkCount } = require('../rag/vectorStore');
+        hasDocuments = (await getChunkCount(dbInstance)) > 0;
+    } catch {}
 
-    // INVALID path: query has no domain relevance
+    // 0c. Classify query type — passes document awareness to classifier
+    const queryType = classifyQuery(naturalLanguageQuery, { hasDocuments });
+    console.log(`${tag} [QUERY_TYPE] ${queryType}${hasDocuments ? ' (documents available)' : ''}`);
+
+    // INVALID path: query has no domain relevance AND no documents to search
     if (queryType === 'INVALID') {
         const dsName = activeConfig.displayName || activeConfig.name;
         console.warn(`${tag} [VALIDATION] Domain check failed at classifier — no domain keywords found.`);
@@ -573,17 +580,6 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
 
     // RAG path: explanation-only, no SQL execution needed
     if (queryType === 'RAG') {
-        // Guard: reject off-topic RAG queries that contain no O2C domain keywords
-        const ragDomainCheck = isDomainQuery(naturalLanguageQuery);
-        if (!ragDomainCheck.valid) {
-            console.warn(`${tag} [VALIDATION] RAG domain check failed — off-topic query blocked.`);
-            return {
-                success: false,
-                dataset: activeConfig.name,
-                error: { message: ragDomainCheck.message, type: 'VALIDATION_ERROR' },
-                query: naturalLanguageQuery
-            };
-        }
         const context = await retrieveContext(naturalLanguageQuery, dbInstance);
         console.log(`${tag} [RESULT] RAG response dispatched (rowCount: 0).`);
         return {
@@ -610,9 +606,9 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
         };
     }
 
-    // 1. Guardrails
+    // 1. Guardrails (bypassed for document-enriched tenants on non-domain queries)
     const intentCheck = isIntentValid(naturalLanguageQuery);
-    if (!intentCheck.valid) {
+    if (!intentCheck.valid && !hasDocuments) {
         console.warn(`${tag} [VALIDATION] Intent check failed — no recognized business action.`);
         return {
             success: false,
@@ -623,8 +619,8 @@ async function processQuery(naturalLanguageQuery, requestId = 'dev-local', optio
     }
 
     const domainCheck = isDomainQuery(naturalLanguageQuery);
-    if (!domainCheck.valid) {
-        console.warn(`${tag} [VALIDATION] Domain check failed — query outside O2C scope.`);
+    if (!domainCheck.valid && !hasDocuments) {
+        console.warn(`${tag} [VALIDATION] Domain check failed — query outside dataset scope.`);
         return {
             success: false,
             dataset: activeConfig.name,

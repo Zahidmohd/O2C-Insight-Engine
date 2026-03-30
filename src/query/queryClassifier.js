@@ -19,21 +19,31 @@ const RAG_KEYWORDS = [
     'overview', 'concept of', 'what are'
 ];
 
-function classifyQuery(query) {
+/**
+ * @param {string} query
+ * @param {object} opts
+ * @param {boolean} opts.hasDocuments - Whether the tenant has uploaded documents
+ */
+function classifyQuery(query, opts = {}) {
     const config = getActiveConfig();
     const lower = query.toLowerCase();
 
-    // Domain gate — reject queries with no relevance to active dataset
-    if (!config.domainKeywords.some(kw => lower.includes(kw))) return 'INVALID';
+    const hasDomainMatch = config.domainKeywords.some(kw => lower.includes(kw));
 
-    // HYBRID first — these queries need both SQL data AND business context
-    if (HYBRID_KEYWORDS.some(kw => lower.includes(kw))) return 'HYBRID';
+    // If query matches domain keywords, classify normally
+    if (hasDomainMatch) {
+        if (HYBRID_KEYWORDS.some(kw => lower.includes(kw))) return 'HYBRID';
+        if (RAG_KEYWORDS.some(kw => lower.includes(kw))) return 'RAG';
+        return 'SQL';
+    }
 
-    // RAG second — explanation-only queries with no document-level data needed
-    if (RAG_KEYWORDS.some(kw => lower.includes(kw))) return 'RAG';
+    // No domain match — but if documents exist, route to RAG (search uploaded content)
+    if (opts.hasDocuments) {
+        return 'RAG';
+    }
 
-    // Default — standard SQL generation path
-    return 'SQL';
+    // No domain match, no documents — reject
+    return 'INVALID';
 }
 
 module.exports = { classifyQuery };
