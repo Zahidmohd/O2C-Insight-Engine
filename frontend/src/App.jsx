@@ -506,7 +506,7 @@ function App() {
 
     try {
       const response = await axios.post(`${API_BASE}/api/query`, { query: currentQuery, includeSql: showSql }, { timeout: 120000, signal: controller.signal });
-      const { success, requestId, dataset, queryType, rowCount, executionTimeMs, graph, reason, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, queryPlan, complexity, truncated, message } = response.data;
+      const { success, requestId, dataset, queryType, rowCount, executionTimeMs, graph, reason, resultStatus, suggestions, summary, highlightNodes: hl, nlAnswer, sql, explanation, confidence, confidenceLabel, confidenceReasons, executionPlan, queryPlan, complexity, truncated, message } = response.data;
 
       if (success) {
         const info = {
@@ -525,7 +525,9 @@ function App() {
           confidence: confidence ?? null,
           confidenceLabel: confidenceLabel || null,
           confidenceReasons: confidenceReasons || [],
+          executionPlan: executionPlan || null,
           queryPlan: queryPlan || null,
+          resultStatus: resultStatus || null,
           complexity: complexity || null,
           truncated: truncated || false,
           message: message || null
@@ -947,8 +949,12 @@ function App() {
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'INVALID_ID' && (
                 <div className="empty-error">Document not found in the dataset</div>
               )}
-              {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'NO_FLOW' && (
-                <div className="empty-warn">No connected flow found</div>
+              {resultInfo && !resultInfo.hasNodes && ['NO_FLOW', 'INCOMPLETE_FLOW', 'NO_DATA', 'NO_GAPS'].includes(resultInfo.reason) && (
+                <div className={resultInfo.resultStatus === 'NO_GAPS_FOUND' ? 'empty-info' : 'empty-warn'}>
+                  {resultInfo.resultStatus === 'INCOMPLETE_FLOW' ? 'Incomplete document flow — some stages are missing' :
+                   resultInfo.resultStatus === 'NO_GAPS_FOUND' ? 'No gaps detected — all flows are complete' :
+                   'No connected flow found'}
+                </div>
               )}
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'AGGREGATION' && (
                 <div className="empty-info">Aggregation results shown in chat</div>
@@ -959,7 +965,7 @@ function App() {
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'LLM_UNAVAILABLE' && (
                 <div className="empty-warn">AI providers temporarily unavailable</div>
               )}
-              {resultInfo && !resultInfo.hasNodes && !['INVALID_ID','NO_FLOW','AGGREGATION','RAG_RESPONSE','LLM_UNAVAILABLE'].includes(resultInfo.reason) && (
+              {resultInfo && !resultInfo.hasNodes && !['INVALID_ID','NO_FLOW','INCOMPLETE_FLOW','NO_DATA','NO_GAPS','AGGREGATION','RAG_RESPONSE','LLM_UNAVAILABLE'].includes(resultInfo.reason) && (
                 <div>No graph data available</div>
               )}
             </div>
@@ -1055,10 +1061,10 @@ function App() {
                     {!r.nlAnswer && r.summary && (
                       <div className={
                         r.reason === 'INVALID_ID' ? 'chat-error' :
-                        r.reason === 'NO_FLOW' || r.reason === 'LLM_UNAVAILABLE' ? 'chat-info' :
+                        ['NO_FLOW','INCOMPLETE_FLOW','NO_DATA','NO_GAPS','LLM_UNAVAILABLE'].includes(r.reason) ? 'chat-info' :
                         'chat-agent-msg'
                       }>
-                        {r.reason === 'INVALID_ID' || r.reason === 'NO_FLOW' || r.reason === 'LLM_UNAVAILABLE' ? (
+                        {r.reason === 'INVALID_ID' || ['NO_FLOW','INCOMPLETE_FLOW','NO_DATA','NO_GAPS','LLM_UNAVAILABLE'].includes(r.reason) ? (
                           r.summary
                         ) : (
                           <>
@@ -1106,7 +1112,7 @@ function App() {
                     )}
 
                     {/* Metadata badges row */}
-                    {(r.queryType || r.complexity || r.queryPlan) && (
+                    {(r.queryType || r.complexity || r.executionPlan) && (
                       <div className="response-badges">
                         {r.queryType && (
                           <span className={`query-type-badge ${queryTypeBadgeClass(r.queryType)}`}>{r.queryType}</span>
@@ -1114,8 +1120,8 @@ function App() {
                         {r.complexity && (
                           <span className={`query-type-badge ${complexityBadgeClass(r.complexity)}`}>{r.complexity}</span>
                         )}
-                        {r.queryPlan && (
-                          <span className={`query-type-badge ${planBadgeClass(r.queryPlan)}`}>{r.queryPlan.replace('_', ' ')}</span>
+                        {r.executionPlan && (
+                          <span className={`query-type-badge ${planBadgeClass(r.executionPlan)}`}>{r.executionPlan.replace('_', ' ')}</span>
                         )}
                         {r.confidence != null && (
                           <span className={`confidence-badge confidence-badge-${r.confidenceLabel?.toLowerCase() || 'medium'}`}>
@@ -1131,6 +1137,13 @@ function App() {
                         {r.confidenceReasons.map((reason, ci) => (
                           <span key={ci}>&#8226; {reason}{ci < r.confidenceReasons.length - 1 ? ' ' : ''}</span>
                         ))}
+                      </div>
+                    )}
+
+                    {/* Query plan reasoning */}
+                    {r.queryPlan && r.queryPlan.reasoning && (
+                      <div className="confidence-reasons">
+                        <span>&#9654; {r.queryPlan.reasoning}</span>
                       </div>
                     )}
 
