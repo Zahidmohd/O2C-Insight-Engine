@@ -87,23 +87,6 @@ async function insertDocument(dbConn = db, { title, filename, fileType, fileSize
     return result.lastInsertRowid;
 }
 
-/**
- * Lazily creates the Turso vector index after data exists.
- * Avoids the corrupted-empty-table-index bug.
- */
-async function ensureVectorIndex(dbConn) {
-    try {
-        // Check if index already exists
-        const idx = await dbConn.allAsync("SELECT name FROM sqlite_master WHERE type='index' AND name='chunk_vec_idx'");
-        if (idx.length > 0) return; // Already exists
-
-        await dbConn.execAsync('CREATE INDEX chunk_vec_idx ON document_chunks(libsql_vector_idx(embedding));');
-        console.log('[VECTOR_STORE] Turso vector index created (lazy, after data insert).');
-    } catch (err) {
-        console.warn('[VECTOR_STORE] Vector index creation skipped:', err.message);
-    }
-}
-
 async function insertChunks(dbConn = db, documentId, chunks) {
     const isTurso = dbConn.type === 'turso' && USE_TURSO_VECTOR;
     const statements = [];
@@ -111,15 +94,15 @@ async function insertChunks(dbConn = db, documentId, chunks) {
     for (const chunk of chunks) {
         const embeddingJson = JSON.stringify(Array.from(chunk.embedding));
 
+        // Store embedding as JSON text for both SQLite and Turso
+        // Turso vector search uses vector32() at QUERY time, not insert time
+        // This avoids batch write failures with vector32() function
         if (isTurso) {
-            // Turso: store in both F32_BLOB (for vector search) and JSON (for fallback)
-            const embStr = '[' + Array.from(chunk.embedding).map(v => Number(v).toFixed(6)).join(',') + ']';
             statements.push({
-                sql: 'INSERT INTO document_chunks (document_id, chunk_index, text, embedding, embedding_json) VALUES (?, ?, ?, vector32(?), ?)',
-                args: [documentId, chunk.index, chunk.text, embStr, embeddingJson]
+                sql: 'INSERT INTO document_chunks (document_id, chunk_index, text, embedding_json) VALUES (?, ?, ?, ?)',
+                args: [documentId, chunk.index, chunk.text, embeddingJson]
             });
         } else {
-            // SQLite: JSON string only
             statements.push({
                 sql: 'INSERT INTO document_chunks (document_id, chunk_index, text, embedding) VALUES (?, ?, ?, ?)',
                 args: [documentId, chunk.index, chunk.text, embeddingJson]
@@ -131,10 +114,7 @@ async function insertChunks(dbConn = db, documentId, chunks) {
     // Update chunk count on the document
     await dbConn.runAsync('UPDATE documents SET chunk_count = ? WHERE id = ?', [chunks.length, documentId]);
 
-    // Create vector index after first successful insert (Turso only)
-    if (isTurso) {
-        await ensureVectorIndex(dbConn);
-    }
+    // Note: vector index not needed — we use vector_distance_cos() with ORDER BY at query time
 }
 
 async function deleteDocument(dbConn = db, id) {
@@ -171,16 +151,18 @@ function cosineSimilarity(a, b) {
  * Returns top-K chunks by vector similarity (indexed, O(log n)).
  */
 async function tursoVectorSearch(dbConn, queryEmbedding, topK = 5) {
-    // Format as JSON array string: "[0.1234,0.5678,...]"
+    // Use vector_distance_cos on embedding_json (TEXT column) with vector32() conversion at query time
     const embStr = '[' + Array.from(queryEmbedding).map(v => v.toFixed(6)).join(',') + ']';
 
     const rows = await dbConn.allAsync(`
         SELECT dc.text, d.title as documentTitle,
-               vector_distance_cos(dc.embedding, vector32(?)) as distance
-        FROM vector_top_k('chunk_vec_idx', vector32(?), ${Number(topK)}) AS vt
-        JOIN document_chunks dc ON dc.rowid = vt.id
+               vector_distance_cos(vector32(dc.embedding_json), vector32(?)) as distance
+        FROM document_chunks dc
         JOIN documents d ON dc.document_id = d.id
-    `, [embStr, embStr]);
+        WHERE dc.embedding_json IS NOT NULL
+        ORDER BY distance ASC
+        LIMIT ${Number(topK)}
+    `, [embStr]);
 
     // Convert distance (0=identical, 2=opposite) to score (1=identical, 0=orthogonal)
     return rows.map(r => ({
