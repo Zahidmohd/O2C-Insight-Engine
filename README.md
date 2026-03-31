@@ -24,9 +24,10 @@ cp .env.example .env
 #   CEREBRAS_API_KEY=your_cerebras_key
 #   SAMBANOVA_API_KEY=your_sambanova_key
 #
-# For multi-tenant (optional — system works without these):
+# For multi-tenant + auth (optional — system works without these):
 #   TURSO_API_TOKEN=your_turso_platform_token
 #   TURSO_ORG_SLUG=your_turso_org_name
+#   JWT_SECRET=your_stable_secret_string
 
 # 3. Start server (auto-initializes DB on first run)
 node server.js
@@ -75,6 +76,10 @@ Open `http://localhost:5173` (dev) or `http://localhost:3000` (production build 
 
 ```
 src/
+├── auth/
+│   ├── authDb.js            # Shared Turso auth DB (user credentials)
+│   ├── authRoutes.js        # Register, login, token verification
+│   └── authMiddleware.js    # JWT verification middleware
 ├── config/
 │   ├── activeDataset.js     # Global + per-tenant dataset config management
 │   ├── datasetConfig.js     # SAP O2C default config (tables, relationships, keywords)
@@ -357,9 +362,9 @@ The system supports per-tenant database isolation using **Turso** (managed SQLit
 ### How It Works
 
 ```
-New user visits → frontend generates UUID → POST /api/tenants →
-Turso DB provisioned (background) → schema + O2C data loaded →
-tenant ready (queries use Turso DB)
+New user → Register (email + password) → bcrypt hash stored in shared auth DB →
+Turso tenant DB auto-provisioned → O2C data loaded (background) →
+JWT token returned → all requests authenticated via Authorization header
 ```
 
 ### Tenant Resolution
@@ -388,7 +393,19 @@ When `TURSO_API_TOKEN` and `TURSO_ORG_SLUG` are configured:
 | **Documents/RAG** | Document chunks stored in tenant's DB |
 | **Dataset upload** | Replaces data in tenant's DB only |
 
-### API
+### Authentication
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/auth/register` | Create account (email + password) → provisions Turso DB → returns JWT |
+| `POST` | `/api/auth/login` | Verify credentials → returns JWT (contains tenantId) |
+| `GET` | `/api/auth/me` | Verify token → returns user email + tenantId |
+
+- **Password storage:** bcrypt hash (cost factor 10) in shared Turso auth DB
+- **Token:** JWT with 30-day expiry, contains `{ email, tenantId }`
+- **Auth DB:** Single shared Turso database (`o2c-auth`) — separate from tenant data DBs
+
+### Tenant API
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -410,7 +427,8 @@ When `TURSO_API_TOKEN` and `TURSO_ORG_SLUG` are configured:
 - **Query Metadata Badges** — Color-coded badges for query type (SQL/RAG/HYBRID), complexity (SIMPLE/MODERATE/COMPLEX), execution plan (LLM/RULE_BASED/FALLBACK), and confidence level
 - **Context Line** — "Based on X records from your dataset" / "From knowledge base"
 - **Suggestion Chips** — When an invalid ID is entered or all LLMs fail, clickable alternatives are shown
-- **Auto-Tenant Provisioning** — First visit auto-creates a tenant; no signup required
+- **Authentication** — Email + password signup/login with JWT tokens; logout button in navbar
+- **Auto-Tenant Provisioning** — Registration auto-creates a per-tenant Turso cloud database
 - **Dataset Upload Wizard** — Three-tab modal: config upload, raw data onboarding (with ZIP support), and document management
 - **Document RAG Upload** — Upload PDF/DOCX/TXT/MD documents to enhance the knowledge base; view and delete uploaded documents
 - **Show SQL Toggle** — Developer mode to see generated SQL
@@ -571,7 +589,8 @@ Every component runs on free-tier services — no credit card required.
 | **Vector Search** | Turso native (F32_BLOB + DiskANN) | Included in Turso free tier |
 | **Embeddings** | HuggingFace Transformers.js (local) | No API calls, runs on server |
 | **LLM Providers** | NVIDIA, Cerebras, Groq, OpenRouter, SambaNova | Free-tier API keys |
-| **Auth** | UUID in localStorage | No auth service needed |
+| **Auth** | Email + password + JWT | bcrypt + jsonwebtoken (no auth service) |
+| **Auth DB** | Turso (shared `o2c-auth`) | Included in Turso free tier |
 | **File Storage** | Turso (documents stored as chunks) | Included in Turso free tier |
 
 ---
@@ -583,7 +602,7 @@ Every component runs on free-tier services — no credit card required.
 - **Turso Free Tier** — 500 databases, 9GB storage, 25M row reads/month. Sufficient for demos and small-scale usage
 - **Free-Tier Rate Limits** — Provider availability depends on remaining API quota; complex queries may fail during rate limit windows
 - **Fallback SQL** — Keyword-to-table matching can only produce simple SELECT queries, not multi-hop JOINs
-- **No Authentication** — Tenant isolation uses UUID tokens in localStorage, not real user auth
+- **No Password Reset** — Email + password auth is implemented, but no forgot password / reset flow yet
 - **First 60s After Deploy** — New tenants use global SQLite while Turso DB initializes in background; fully transparent to the user
 
 ---

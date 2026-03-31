@@ -290,6 +290,9 @@ Config Generation
 | `POST` | `/api/documents/upload` | Upload document → extract → chunk → embed → store (tenant-scoped) |
 | `GET` | `/api/documents` | List uploaded documents (tenant-scoped) |
 | `DELETE` | `/api/documents/:id` | Delete document and all its chunks |
+| `POST` | `/api/auth/register` | Create account → provision Turso DB → return JWT |
+| `POST` | `/api/auth/login` | Verify credentials → return JWT |
+| `GET` | `/api/auth/me` | Verify token → return user info |
 | `POST` | `/api/tenants` | Create tenant (auto-provisions Turso DB) |
 | `GET` | `/api/tenants` | List registered tenants |
 | `DELETE` | `/api/tenants/:id` | Delete tenant + destroy Turso DB |
@@ -399,8 +402,12 @@ src/
 │   ├── documentExtractor.js     ← PDF/DOCX/TXT/MD text extraction
 │   ├── chunker.js               ← Recursive character text splitter
 │   └── zipExtractor.js          ← ZIP archive extraction for dataset uploads
+├── auth/
+│   ├── authDb.js                ← Shared Turso auth DB for user credentials
+│   ├── authRoutes.js            ← Register, login, verify endpoints
+│   └── authMiddleware.js        ← JWT verification middleware
 ├── middleware/
-│   └── tenantResolver.js        ← Resolves X-Tenant-Id → req.db + req.config
+│   └── tenantResolver.js        ← Resolves tenantId from JWT → req.db + req.config
 ├── config/
 │   └── datasetConfig.js         ← Global + per-tenant config management
 ├── onboarding/
