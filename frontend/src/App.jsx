@@ -651,7 +651,30 @@ function App() {
           dataConfidence: dataConfidence || null
         };
         setResultInfo(info);
-        setChatHistory(prev => [...prev, { type: 'user', text: currentQuery }, { type: 'agent', info }]);
+        // Store only display-relevant fields in chat history (no raw data/graph — saves localStorage space)
+        const chatInfo = {
+          nlAnswer: info.nlAnswer,
+          summary: info.summary,
+          reason: info.reason,
+          resultStatus: info.resultStatus,
+          message: info.message,
+          queryType: info.queryType,
+          complexity: info.complexity,
+          executionPlan: info.executionPlan,
+          confidence: info.confidence,
+          confidenceLabel: info.confidenceLabel,
+          confidenceReasons: info.confidenceReasons,
+          queryPlan: info.queryPlan,
+          explanation: info.explanation,
+          rowCount: info.rowCount,
+          truncated: info.truncated,
+          suggestions: info.suggestions,
+          sql: info.sql,
+          hasNodes: info.hasNodes,
+          metrics: info.metrics,
+          dataConfidence: info.dataConfidence
+        };
+        setChatHistory(prev => [...prev, { type: 'user', text: currentQuery }, { type: 'agent', info: chatInfo }]);
         initCytoscape(graph, hl || []);
       }
     } catch (err) {
