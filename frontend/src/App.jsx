@@ -80,6 +80,7 @@ function AuthScreen({ onAuth }) {
       <div className="auth-card">
         <div className="auth-logo">O2C</div>
         <h2 className="auth-title">Insight Engine</h2>
+        <p className="auth-tagline">Ask questions about your data in plain English. Get instant answers with interactive graph visualizations.</p>
         <p className="auth-subtitle">{isLogin ? 'Sign in to your account' : 'Create a new account'}</p>
 
         <form onSubmit={handleSubmit} className="auth-form">
@@ -135,7 +136,12 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [resultInfo, setResultInfo] = useState(null);
-  const [chatHistory, setChatHistory] = useState([]);
+  const [chatHistory, setChatHistory] = useState(() => {
+    try {
+      const saved = localStorage.getItem('chatHistory');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [selectedNode, setSelectedNode] = useState(null);
   const [showLabels, setShowLabels] = useState(true);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -164,6 +170,11 @@ function App() {
   const abortControllerRef = useRef(null);
 
   const API_BASE = import.meta.env.VITE_API_URL || '';
+
+  // Persist chat history to localStorage
+  useEffect(() => {
+    try { localStorage.setItem('chatHistory', JSON.stringify(chatHistory)); } catch {}
+  }, [chatHistory]);
 
   const [datasetError, setDatasetError] = useState(false);
 
@@ -657,7 +668,9 @@ function App() {
         errMsg = err.message;
       }
       setError(errMsg);
-      setChatHistory(prev => [...prev, { type: 'user', text: currentQuery }, { type: 'error', text: errMsg }]);
+      const examples = getWelcomeExamples();
+      const hint = examples.length > 0 ? '\n\nTry asking: ' + examples.slice(0, 2).join(' or ') : '';
+      setChatHistory(prev => [...prev, { type: 'user', text: currentQuery }, { type: 'error', text: errMsg + hint }]);
     } finally {
       setIsLoading(false);
     }
@@ -739,6 +752,7 @@ function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('authToken');
+    localStorage.removeItem('chatHistory');
     delete axios.defaults.headers.common['Authorization'];
     setAuthToken(null);
     setChatHistory([]);
@@ -1083,7 +1097,12 @@ function App() {
           {(!resultInfo || (resultInfo && !resultInfo.hasNodes)) && !isLoading && (
             <div className="graph-empty-state">
               <div className="empty-icon">&#9672;</div>
-              {!resultInfo && <div>Ask a question to visualize the graph</div>}
+              {!resultInfo && (
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Ask a question to get started</div>
+                  <div style={{ fontSize: 12, color: '#8b8fa3' }}>Your results will appear here as an interactive graph</div>
+                </div>
+              )}
               {resultInfo && !resultInfo.hasNodes && resultInfo.reason === 'INVALID_ID' && (
                 <div className="empty-error">Document not found in the dataset</div>
               )}
@@ -1158,7 +1177,7 @@ function App() {
 
           <div className="chat-messages">
             <div className="chat-welcome">
-              Hi! I can help you analyze the <strong>{dsName}</strong> dataset. Try asking:
+              Hi! I can help you analyze the <strong>{dsName}</strong> dataset. Ask any question in plain English — I'll generate SQL, run it, and show you the results as a graph. Try asking:
               <ul className="welcome-examples">
                 {getWelcomeExamples().map((ex, i) => (
                   <li key={i}>
