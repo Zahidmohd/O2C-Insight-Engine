@@ -130,10 +130,16 @@ body, html {
   width: 520px;
   max-width: 90vw;
   max-height: 85vh;
-  overflow: hidden;
+  overflow: hidden !important;
   animation: slideUp 0.2s ease-out;
   display: flex;
   flex-direction: column;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.modal-content::-webkit-scrollbar {
+  display: none;
 }
 
 @keyframes slideUp {
