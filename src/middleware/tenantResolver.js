@@ -29,14 +29,22 @@ function tenantResolver(req, res, next) {
     const tenant = getTenant(tenantId);
 
     if (!tenant) {
-        // Unregistered tenant → use global DB (graceful fallback)
+        // Unregistered tenant → use global DB
         req.db = globalDb;
         req.tenantId = tenantId;
         req.config = getActiveConfig();
         return next();
     }
 
-    // ── REGISTERED TENANT: STRICT ISOLATION ──────────────────────────────────
+    // Registered but NOT yet initialized → use global DB until background init finishes
+    if (!tenant.initialized) {
+        req.db = globalDb;
+        req.tenantId = tenantId;
+        req.config = getActiveConfig();
+        return next();
+    }
+
+    // ── REGISTERED + INITIALIZED TENANT: USE TURSO DB ────────────────────────
 
     const tenantDb = getDbForTenant(tenantId);
     if (!tenantDb) {
