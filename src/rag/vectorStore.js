@@ -3,16 +3,15 @@
  * Tables persist across dataset switches (excluded from DROP in init.js).
  *
  * DUAL-MODE:
- * - Turso connections: Uses F32_BLOB(384) + vector_top_k() for native indexed search
- * - SQLite connections: Stores embeddings as JSON, uses brute-force cosine similarity
+ * - Turso: F32_BLOB(384) column + vector_top_k() with DiskANN index
+ * - SQLite: JSON TEXT embeddings + brute-force cosine similarity
  *
  * All functions accept an optional dbConn parameter for multi-tenant support.
- * When omitted, falls back to the global SQLite connection.
  */
 
 const db = require('../db/connection');
 
-const USE_TURSO_VECTOR = process.env.USE_TURSO_VECTOR !== 'false'; // default: true
+const USE_TURSO_VECTOR = process.env.USE_TURSO_VECTOR !== 'false';
 
 // ─── Table Initialization ────────────────────────────────────────────────────
 
@@ -20,7 +19,6 @@ async function initDocumentTables(dbConn = db) {
     const isTurso = dbConn.type === 'turso';
 
     if (isTurso && USE_TURSO_VECTOR) {
-        // Turso: use F32_BLOB for native vector support
         await dbConn.execAsync(`
             CREATE TABLE IF NOT EXISTS documents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,13 +42,9 @@ async function initDocumentTables(dbConn = db) {
 
             CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id);
         `);
-
-        // NOTE: Vector index is NOT created here — empty-table indexes get corrupted on Turso.
-        // Index is created lazily after the first chunk insert (see ensureVectorIndex).
-
+        // Vector index created AFTER first data insert (empty-table index corrupts on Turso)
         console.log('[VECTOR_STORE] Document tables initialized (Turso vector mode).');
     } else {
-        // SQLite: JSON string embeddings with brute-force search
         await dbConn.execAsync(`
             CREATE TABLE IF NOT EXISTS documents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,32 +83,40 @@ async function insertDocument(dbConn = db, { title, filename, fileType, fileSize
 
 async function insertChunks(dbConn = db, documentId, chunks) {
     const isTurso = dbConn.type === 'turso' && USE_TURSO_VECTOR;
-    const statements = [];
 
-    for (const chunk of chunks) {
-        const embeddingJson = JSON.stringify(Array.from(chunk.embedding));
-
-        // Store embedding as JSON text for both SQLite and Turso
-        // Turso vector search uses vector32() at QUERY time, not insert time
-        // This avoids batch write failures with vector32() function
-        if (isTurso) {
-            statements.push({
-                sql: 'INSERT INTO document_chunks (document_id, chunk_index, text, embedding_json) VALUES (?, ?, ?, ?)',
-                args: [documentId, chunk.index, chunk.text, embeddingJson]
-            });
-        } else {
-            statements.push({
-                sql: 'INSERT INTO document_chunks (document_id, chunk_index, text, embedding) VALUES (?, ?, ?, ?)',
-                args: [documentId, chunk.index, chunk.text, embeddingJson]
-            });
+    if (isTurso) {
+        // Turso: use individual execute() calls with vector32() — batch() doesn't support vector32()
+        for (const chunk of chunks) {
+            const embStr = '[' + Array.from(chunk.embedding).map(v => Number(v).toFixed(6)).join(',') + ']';
+            const embJson = JSON.stringify(Array.from(chunk.embedding));
+            await dbConn.runAsync(
+                'INSERT INTO document_chunks (document_id, chunk_index, text, embedding, embedding_json) VALUES (?, ?, ?, vector32(?), ?)',
+                [documentId, chunk.index, chunk.text, embStr, embJson]
+            );
         }
+
+        // Create vector index after first insert (avoids corrupted empty-table index)
+        try {
+            const idx = await dbConn.allAsync("SELECT name FROM sqlite_master WHERE type='index' AND name='chunk_vec_idx'");
+            if (idx.length === 0) {
+                await dbConn.execAsync('CREATE INDEX chunk_vec_idx ON document_chunks(libsql_vector_idx(embedding))');
+                console.log('[VECTOR_STORE] Turso DiskANN vector index created.');
+            }
+        } catch (err) {
+            console.warn('[VECTOR_STORE] Vector index creation skipped:', err.message);
+        }
+    } else {
+        // SQLite: use batchWrite for efficiency
+        const statements = chunks.map(chunk => ({
+            sql: 'INSERT INTO document_chunks (document_id, chunk_index, text, embedding) VALUES (?, ?, ?, ?)',
+            args: [documentId, chunk.index, chunk.text, JSON.stringify(Array.from(chunk.embedding))]
+        }));
+        await dbConn.batchWrite(statements);
     }
-    await dbConn.batchWrite(statements);
 
-    // Update chunk count on the document
+    // Update chunk count
     await dbConn.runAsync('UPDATE documents SET chunk_count = ? WHERE id = ?', [chunks.length, documentId]);
-
-    // Note: vector index not needed — we use vector_distance_cos() with ORDER BY at query time
+    console.log(`[VECTOR_STORE] Stored ${chunks.length} chunks (mode: ${isTurso ? 'turso+F32_BLOB' : 'sqlite+JSON'}).`);
 }
 
 async function deleteDocument(dbConn = db, id) {
@@ -147,24 +149,47 @@ function cosineSimilarity(a, b) {
 }
 
 /**
- * Turso-native vector search using F32_BLOB + vector_top_k().
- * Returns top-K chunks by vector similarity (indexed, O(log n)).
+ * Turso-native vector search using F32_BLOB + vector_top_k() with DiskANN index.
+ * Falls back to vector_distance_cos if index doesn't exist.
  */
 async function tursoVectorSearch(dbConn, queryEmbedding, topK = 5) {
-    // Use vector_distance_cos on embedding_json (TEXT column) with vector32() conversion at query time
     const embStr = '[' + Array.from(queryEmbedding).map(v => v.toFixed(6)).join(',') + ']';
 
+    // Try indexed search first (vector_top_k with DiskANN)
+    try {
+        const idx = await dbConn.allAsync("SELECT name FROM sqlite_master WHERE type='index' AND name='chunk_vec_idx'");
+        if (idx.length > 0) {
+            const rows = await dbConn.allAsync(`
+                SELECT dc.text, d.title as documentTitle,
+                       vector_distance_cos(dc.embedding, vector32(?)) as distance
+                FROM vector_top_k('chunk_vec_idx', vector32(?), ${Number(topK)}) AS vt
+                JOIN document_chunks dc ON dc.rowid = vt.id
+                JOIN documents d ON dc.document_id = d.id
+            `, [embStr, embStr]);
+
+            console.log(`[RAG] Turso vector_top_k (DiskANN indexed): ${rows.length} results.`);
+            return rows.map(r => ({
+                text: r.text,
+                score: 1.0 - (r.distance || 0),
+                documentTitle: r.documentTitle
+            }));
+        }
+    } catch (err) {
+        console.warn(`[RAG] vector_top_k failed: ${err.message}`);
+    }
+
+    // Fallback: brute-force with vector_distance_cos (no index needed)
     const rows = await dbConn.allAsync(`
         SELECT dc.text, d.title as documentTitle,
-               vector_distance_cos(vector32(dc.embedding_json), vector32(?)) as distance
+               vector_distance_cos(dc.embedding, vector32(?)) as distance
         FROM document_chunks dc
         JOIN documents d ON dc.document_id = d.id
-        WHERE dc.embedding_json IS NOT NULL
+        WHERE dc.embedding IS NOT NULL
         ORDER BY distance ASC
         LIMIT ${Number(topK)}
     `, [embStr]);
 
-    // Convert distance (0=identical, 2=opposite) to score (1=identical, 0=orthogonal)
+    console.log(`[RAG] Turso vector_distance_cos (brute-force): ${rows.length} results.`);
     return rows.map(r => ({
         text: r.text,
         score: 1.0 - (r.distance || 0),
@@ -177,7 +202,6 @@ async function tursoVectorSearch(dbConn, queryEmbedding, topK = 5) {
  * Works with any DB type (JSON string embeddings).
  */
 async function inMemorySearch(dbConn, queryEmbedding, topK = 5, threshold = 0.3) {
-    // Determine which column has the embedding data
     const embeddingCol = dbConn.type === 'turso' && USE_TURSO_VECTOR ? 'embedding_json' : 'embedding';
 
     const chunks = await dbConn.allAsync(`
@@ -186,7 +210,7 @@ async function inMemorySearch(dbConn, queryEmbedding, topK = 5, threshold = 0.3)
         JOIN documents d ON dc.document_id = d.id
     `);
 
-    console.log(`[RAG] In-memory search: ${chunks.length} chunks loaded from DB (col: ${embeddingCol}).`);
+    console.log(`[RAG] In-memory search: ${chunks.length} chunks loaded (col: ${embeddingCol}).`);
 
     const results = [];
     for (const chunk of chunks) {
@@ -194,7 +218,6 @@ async function inMemorySearch(dbConn, queryEmbedding, topK = 5, threshold = 0.3)
         try {
             embedding = JSON.parse(chunk.embedding);
         } catch {
-            console.warn(`[RAG] Skipping chunk — invalid embedding JSON (length: ${(chunk.embedding || '').length})`);
             continue;
         }
         const score = cosineSimilarity(queryEmbedding, embedding);
@@ -208,37 +231,29 @@ async function inMemorySearch(dbConn, queryEmbedding, topK = 5, threshold = 0.3)
 }
 
 /**
- * Searches for chunks most similar to the query embedding.
- * Turso connections: tries native vector search first, falls back to in-memory.
- * SQLite connections: always uses in-memory brute-force.
- *
- * @param {object} dbConn - Database connection
- * @param {number[]} queryEmbedding - 384-dim embedding vector
- * @param {number} topK - Max results to return
- * @param {number} threshold - Minimum cosine similarity (in-memory only)
- * @returns {Promise<Array<{text: string, score: number, documentTitle: string}>>}
+ * Search for similar chunks. Three-layer fallback:
+ * 1. Turso vector_top_k (DiskANN indexed) — fastest, native
+ * 2. Turso vector_distance_cos (brute-force) — native math, no index
+ * 3. In-memory cosine similarity (JS) — works on any DB
  */
 async function searchSimilar(dbConn = db, queryEmbedding, topK = 5, threshold = 0.3) {
     const isTurso = dbConn.type === 'turso' && USE_TURSO_VECTOR;
 
     if (isTurso) {
         try {
-            console.log(`[RAG] Attempting Turso native vector search...`);
             const results = await tursoVectorSearch(dbConn, queryEmbedding, topK);
             if (results && results.length > 0) {
-                console.log(`[RAG] Turso native vector search returned ${results.length} chunks.`);
                 return results;
             }
-            console.log(`[RAG] Turso native vector search returned 0 results, falling back to in-memory.`);
         } catch (err) {
             console.warn(`[RAG] Turso vector search failed, falling back to in-memory: ${err.message}`);
         }
     }
 
-    // Fallback: in-memory brute-force cosine similarity
+    // Fallback: in-memory JS cosine similarity
     const results = await inMemorySearch(dbConn, queryEmbedding, topK, threshold);
     if (results.length > 0) {
-        console.log(`[RAG] In-memory vector search returned ${results.length} chunks.`);
+        console.log(`[RAG] In-memory fallback returned ${results.length} chunks.`);
     }
     return results;
 }
