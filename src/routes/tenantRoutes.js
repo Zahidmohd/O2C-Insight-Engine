@@ -120,23 +120,35 @@ router.post('/tenants', async (req, res) => {
         });
 
         // Initialize tenant DB in background (non-blocking)
-        // User queries fall back to global DB until this completes
         (async () => {
             try {
-                console.log(`[TENANT] Background init starting for: ${safeTenantId}...`);
                 const tenantDb = getDbForTenant(safeTenantId);
-                const defaultConfig = getActiveConfig();
 
-                await initDocumentTables(tenantDb);
-                await initDB(defaultConfig, tenantDb);
-                await loadDataset(defaultConfig, tenantDb);
-                setTenantConfig(safeTenantId, defaultConfig);
-                markInitialized(safeTenantId);
+                // Check if Turso DB already has tables (from a previous deploy)
+                const existingTables = await tenantDb.allAsync(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('documents', 'document_chunks', '_litestream_seq', '_litestream_lock')"
+                );
 
-                console.log(`[TENANT] Background init complete for: ${safeTenantId}`);
+                if (existingTables.length > 0) {
+                    // DB already has data — just mark as initialized, don't overwrite
+                    console.log(`[TENANT] Turso DB already has ${existingTables.length} tables, skipping init for: ${safeTenantId}`);
+                    setTenantConfig(safeTenantId, getActiveConfig());
+                    markInitialized(safeTenantId);
+                } else {
+                    // Fresh DB — load default dataset
+                    console.log(`[TENANT] Background init starting for: ${safeTenantId}...`);
+                    const defaultConfig = getActiveConfig();
+
+                    await initDocumentTables(tenantDb);
+                    await initDB(defaultConfig, tenantDb);
+                    await loadDataset(defaultConfig, tenantDb);
+                    setTenantConfig(safeTenantId, defaultConfig);
+                    markInitialized(safeTenantId);
+
+                    console.log(`[TENANT] Background init complete for: ${safeTenantId}`);
+                }
             } catch (initErr) {
                 console.error(`[TENANT] Background init failed for ${safeTenantId}:`, initErr.message);
-                // Tenant stays registered but uninitialized — will use global DB fallback
             }
         })();
 
