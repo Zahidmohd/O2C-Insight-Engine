@@ -45,14 +45,8 @@ async function initDocumentTables(dbConn = db) {
             CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id);
         `);
 
-        // Recreate vector index (drop + create avoids corrupted empty-table index)
-        try {
-            await dbConn.execAsync(`DROP INDEX IF EXISTS chunk_vec_idx;`);
-            await dbConn.execAsync(`CREATE INDEX chunk_vec_idx ON document_chunks(libsql_vector_idx(embedding));`);
-            console.log('[VECTOR_STORE] Turso vector index created.');
-        } catch (err) {
-            console.warn('[VECTOR_STORE] Vector index creation skipped:', err.message);
-        }
+        // NOTE: Vector index is NOT created here — empty-table indexes get corrupted on Turso.
+        // Index is created lazily after the first chunk insert (see ensureVectorIndex).
 
         console.log('[VECTOR_STORE] Document tables initialized (Turso vector mode).');
     } else {
@@ -93,6 +87,23 @@ async function insertDocument(dbConn = db, { title, filename, fileType, fileSize
     return result.lastInsertRowid;
 }
 
+/**
+ * Lazily creates the Turso vector index after data exists.
+ * Avoids the corrupted-empty-table-index bug.
+ */
+async function ensureVectorIndex(dbConn) {
+    try {
+        // Check if index already exists
+        const idx = await dbConn.allAsync("SELECT name FROM sqlite_master WHERE type='index' AND name='chunk_vec_idx'");
+        if (idx.length > 0) return; // Already exists
+
+        await dbConn.execAsync('CREATE INDEX chunk_vec_idx ON document_chunks(libsql_vector_idx(embedding));');
+        console.log('[VECTOR_STORE] Turso vector index created (lazy, after data insert).');
+    } catch (err) {
+        console.warn('[VECTOR_STORE] Vector index creation skipped:', err.message);
+    }
+}
+
 async function insertChunks(dbConn = db, documentId, chunks) {
     const isTurso = dbConn.type === 'turso' && USE_TURSO_VECTOR;
     const statements = [];
@@ -102,7 +113,6 @@ async function insertChunks(dbConn = db, documentId, chunks) {
 
         if (isTurso) {
             // Turso: store in both F32_BLOB (for vector search) and JSON (for fallback)
-            // Format as "[0.1234,0.5678,...]" for vector32()
             const embStr = '[' + Array.from(chunk.embedding).map(v => Number(v).toFixed(6)).join(',') + ']';
             statements.push({
                 sql: 'INSERT INTO document_chunks (document_id, chunk_index, text, embedding, embedding_json) VALUES (?, ?, ?, vector32(?), ?)',
@@ -120,6 +130,11 @@ async function insertChunks(dbConn = db, documentId, chunks) {
 
     // Update chunk count on the document
     await dbConn.runAsync('UPDATE documents SET chunk_count = ? WHERE id = ?', [chunks.length, documentId]);
+
+    // Create vector index after first successful insert (Turso only)
+    if (isTurso) {
+        await ensureVectorIndex(dbConn);
+    }
 }
 
 async function deleteDocument(dbConn = db, id) {
