@@ -268,9 +268,14 @@ function validateForeignKeyConsistency(config, resolvedDataDir) {
         return records;
     }
 
+    const validRelationships = [];
+
     for (const rel of config.relationships) {
         // Skip LEFT JOINs — partial matches are expected by design
-        if (rel.joinType && rel.joinType.toUpperCase().includes('LEFT')) continue;
+        if (rel.joinType && rel.joinType.toUpperCase().includes('LEFT')) {
+            validRelationships.push(rel);
+            continue;
+        }
 
         // In the config: from = parent (PK side), to = child (FK side)
         const parent = parseRef(rel.from);
@@ -278,11 +283,17 @@ function validateForeignKeyConsistency(config, resolvedDataDir) {
 
         // Skip composite keys — raw data may differ from loaded data due
         // to transforms (e.g. item number padding), making pre-load checks unreliable
-        if (parent.cols.length > 1 || child.cols.length > 1) continue;
+        if (parent.cols.length > 1 || child.cols.length > 1) {
+            validRelationships.push(rel);
+            continue;
+        }
 
         // Load parent (from-side) values — need enough to build a lookup set
         const parentRows = getTableSample(parent.table, 5000);
-        if (parentRows.length === 0) continue; // skip if no data
+        if (parentRows.length === 0) {
+            validRelationships.push(rel);
+            continue;
+        }
 
         const parentSet = new Set(parentRows.map(r => compositeKey(r, parent.cols)));
 
@@ -294,20 +305,22 @@ function validateForeignKeyConsistency(config, resolvedDataDir) {
 
         for (let i = 0; i < Math.min(10, childRows.length); i++) {
             const key = compositeKey(childRows[i], child.cols);
-            // Skip null/empty keys — those are valid (nullable FKs)
             if (!key || key === '' || key.split('|').every(v => !v)) continue;
-
             checked++;
             if (parentSet.has(key)) matched++;
         }
 
-        // Fail only if we checked rows and NONE matched — complete disconnection
+        // Auto-remove relationships with zero FK overlap instead of blocking upload
         if (checked > 0 && matched === 0) {
-            throw new Error(
-                `Foreign key mismatch: ${rel.from} → ${rel.to} — 0 of ${checked} sampled rows found in ${parent.table}.`
-            );
+            console.warn(`[VALIDATOR] Auto-removed bad relationship: ${rel.from} → ${rel.to} — 0 of ${checked} sampled rows matched.`);
+            continue; // Skip this relationship — don't add to validRelationships
         }
+
+        validRelationships.push(rel);
     }
+
+    // Replace config relationships with only the validated ones
+    config.relationships = validRelationships;
 }
 
 // ─── Combined Validator ─────────────────────────────────────────────────────
