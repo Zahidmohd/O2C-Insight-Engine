@@ -204,12 +204,15 @@ async function inMemorySearch(dbConn, queryEmbedding, topK = 5, threshold = 0.3)
         JOIN documents d ON dc.document_id = d.id
     `);
 
+    console.log(`[RAG] In-memory search: ${chunks.length} chunks loaded from DB (col: ${embeddingCol}).`);
+
     const results = [];
     for (const chunk of chunks) {
         let embedding;
         try {
             embedding = JSON.parse(chunk.embedding);
         } catch {
+            console.warn(`[RAG] Skipping chunk — invalid embedding JSON (length: ${(chunk.embedding || '').length})`);
             continue;
         }
         const score = cosineSimilarity(queryEmbedding, embedding);
@@ -238,11 +241,13 @@ async function searchSimilar(dbConn = db, queryEmbedding, topK = 5, threshold = 
 
     if (isTurso) {
         try {
+            console.log(`[RAG] Attempting Turso native vector search...`);
             const results = await tursoVectorSearch(dbConn, queryEmbedding, topK);
             if (results && results.length > 0) {
                 console.log(`[RAG] Turso native vector search returned ${results.length} chunks.`);
                 return results;
             }
+            console.log(`[RAG] Turso native vector search returned 0 results, falling back to in-memory.`);
         } catch (err) {
             console.warn(`[RAG] Turso vector search failed, falling back to in-memory: ${err.message}`);
         }
