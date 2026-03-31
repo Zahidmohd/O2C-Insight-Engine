@@ -256,7 +256,9 @@ function buildGenericIdChecks(config) {
         const pk = t.primaryKey[0];
         const displayName = (t.displayName || t.name.replace(/_/g, ' '));
         checks.push({
-            regex: new RegExp(`${pk}\\s*(?:=|LIKE)\\s*['"]?([\\w]+)['"]?`, 'i'),
+            // Match pk = 'value' or pk = "value" or pk = 12345 (quoted or numeric only)
+            // Excludes bare words like table aliases (bdh, soh, etc.)
+            regex: new RegExp(`(?<![.\\w])${pk}\\s*(?:=|LIKE)\\s*'([^']+)'`, 'i'),
             table: `"${t.name}"`,
             column: `"${pk}"`,
             label: displayName
