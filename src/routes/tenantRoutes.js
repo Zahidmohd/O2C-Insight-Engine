@@ -60,16 +60,33 @@ router.post('/tenants', async (req, res) => {
                 body: JSON.stringify({ name: `o2c-${safeTenantId}`, group: 'default' })
             });
 
-            if (!createRes.ok) {
+            if (createRes.ok) {
+                const createData = await createRes.json();
+                finalUrl = `libsql://${createData.database.Hostname}`;
+            } else if (createRes.status === 409 || createRes.status === 422) {
+                // DB already exists (previous deploy) — look up its hostname and reuse
+                console.log(`[TENANT] Turso DB already exists for tenant: ${safeTenantId}, reusing.`);
+                try {
+                    const infoRes = await fetch(`https://api.turso.tech/v1/organizations/${TURSO_ORG_SLUG}/databases/o2c-${safeTenantId}`, {
+                        headers: { 'Authorization': `Bearer ${TURSO_API_TOKEN}` }
+                    });
+                    if (infoRes.ok) {
+                        const infoData = await infoRes.json();
+                        finalUrl = `libsql://${infoData.database.Hostname}`;
+                    } else {
+                        finalUrl = `libsql://o2c-${safeTenantId}-${TURSO_ORG_SLUG}.turso.io`;
+                    }
+                } catch {
+                    finalUrl = `libsql://o2c-${safeTenantId}-${TURSO_ORG_SLUG}.turso.io`;
+                }
+            } else {
                 const err = await createRes.text();
+                console.error(`[TENANT] Turso DB creation failed (${createRes.status}): ${err}`);
                 return res.status(500).json({
                     success: false,
                     error: { message: `Turso DB creation failed: ${err}`, type: 'TURSO_ERROR' }
                 });
             }
-
-            const createData = await createRes.json();
-            finalUrl = `libsql://${createData.database.Hostname}`;
 
             // Generate auth token
             const tokenRes = await fetch(`https://api.turso.tech/v1/organizations/${TURSO_ORG_SLUG}/databases/o2c-${safeTenantId}/auth/tokens`, {
