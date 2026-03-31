@@ -19,6 +19,14 @@ const RAG_KEYWORDS = [
     'overview', 'concept of', 'what are'
 ];
 
+// Schema exploration queries — always route to RAG (answered by dynamic KB)
+const SCHEMA_KEYWORDS = [
+    'what tables', 'which tables', 'list tables', 'show tables',
+    'how are', 'how is', 'connected', 'relationship', 'relationships',
+    'schema', 'structure', 'columns in', 'fields in',
+    'about the dataset', 'about this dataset', 'data flow'
+];
+
 /**
  * @param {string} query
  * @param {object} opts
@@ -29,6 +37,9 @@ function classifyQuery(query, opts = {}) {
     const lower = query.toLowerCase();
 
     const hasDomainMatch = config.domainKeywords.some(kw => lower.includes(kw));
+
+    // Schema exploration queries always go to RAG (answered by dynamic KB)
+    if (SCHEMA_KEYWORDS.some(kw => lower.includes(kw))) return 'RAG';
 
     // If query matches domain keywords, classify normally
     if (hasDomainMatch) {
