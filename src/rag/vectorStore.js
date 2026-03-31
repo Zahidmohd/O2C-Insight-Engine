@@ -19,8 +19,13 @@ async function initDocumentTables(dbConn = db) {
     const isTurso = dbConn.type === 'turso';
 
     if (isTurso && USE_TURSO_VECTOR) {
+        // Drop and recreate to ensure clean state (no corrupted indexes from previous deploys)
         await dbConn.execAsync(`
-            CREATE TABLE IF NOT EXISTS documents (
+            DROP INDEX IF EXISTS chunk_vec_idx;
+            DROP TABLE IF EXISTS document_chunks;
+            DROP TABLE IF EXISTS documents;
+
+            CREATE TABLE documents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
                 filename TEXT NOT NULL,
@@ -30,7 +35,7 @@ async function initDocumentTables(dbConn = db) {
                 created_at TEXT DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS document_chunks (
+            CREATE TABLE document_chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 document_id INTEGER NOT NULL,
                 chunk_index INTEGER NOT NULL,
@@ -40,10 +45,10 @@ async function initDocumentTables(dbConn = db) {
                 FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
             );
 
-            CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id);
+            CREATE INDEX idx_chunks_doc ON document_chunks(document_id);
         `);
         // Vector index created AFTER first data insert (empty-table index corrupts on Turso)
-        console.log('[VECTOR_STORE] Document tables initialized (Turso vector mode).');
+        console.log('[VECTOR_STORE] Document tables initialized (Turso — fresh tables).');
     } else {
         await dbConn.execAsync(`
             CREATE TABLE IF NOT EXISTS documents (
