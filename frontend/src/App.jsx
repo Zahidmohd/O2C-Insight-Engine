@@ -40,6 +40,7 @@ function AuthScreen({ onAuth }) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const API = import.meta.env.VITE_API_URL || '';
@@ -47,6 +48,10 @@ function AuthScreen({ onAuth }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
+    if (!isLogin && password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
     setLoading(true);
     try {
       const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
@@ -88,6 +93,17 @@ function AuthScreen({ onAuth }) {
             minLength={6}
             className="auth-input"
           />
+          {!isLogin && (
+            <input
+              type="password"
+              placeholder="Confirm password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              minLength={6}
+              className="auth-input"
+            />
+          )}
           <button type="submit" className="auth-btn" disabled={loading}>
             {loading ? 'Please wait...' : isLogin ? 'Sign In' : 'Create Account'}
           </button>
@@ -97,7 +113,7 @@ function AuthScreen({ onAuth }) {
 
         <div className="auth-switch">
           {isLogin ? "Don't have an account? " : 'Already have an account? '}
-          <button className="auth-switch-btn" onClick={() => { setIsLogin(!isLogin); setError(null); }}>
+          <button className="auth-switch-btn" onClick={() => { setIsLogin(!isLogin); setError(null); setConfirmPassword(''); }}>
             {isLogin ? 'Sign up' : 'Sign in'}
           </button>
         </div>
