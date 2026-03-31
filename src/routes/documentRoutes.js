@@ -88,7 +88,7 @@ router.post('/documents/upload', docUpload.single('file'), async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            documentId,
+            documentId: Number(documentId),
             title,
             filename: req.file.originalname,
             chunkCount: chunks.length,
