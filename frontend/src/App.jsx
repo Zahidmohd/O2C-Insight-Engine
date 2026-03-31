@@ -11,13 +11,13 @@ const tenantId = localStorage.getItem('tenantId') || (() => {
 })();
 axios.defaults.headers.common['X-Tenant-Id'] = tenantId;
 
-// Auto-provision tenant on first visit (non-blocking)
-if (!localStorage.getItem('tenantInitialized')) {
+// Auto-provision tenant on every app load (non-blocking, idempotent)
+// POST /api/tenants returns 409 if tenant already exists — that's fine.
+// This ensures tenant is always created even after server redeploys.
+(() => {
   const API = import.meta.env.VITE_API_URL || '';
-  axios.post(`${API}/api/tenants`, { tenantId }).then(() => {
-    localStorage.setItem('tenantInitialized', 'true');
-  }).catch(() => {}); // 409 (already exists) or any error — silently ignore
-}
+  axios.post(`${API}/api/tenants`, { tenantId }).catch(() => {});
+})();
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
