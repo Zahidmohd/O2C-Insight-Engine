@@ -124,7 +124,7 @@ function inferColumns(records) {
 // ─── Primary Key Detection ─────────────────────────────────────────────────
 
 /** Suffixes that suggest a column is an identifier */
-const ID_SUFFIXES = ['id', '_id', 'key', 'code', 'number', 'no', 'num', 'ref'];
+const ID_SUFFIXES = ['id', '_id', 'key', 'code', 'number', 'no', 'num', 'ref', 'document', 'order', 'partner'];
 
 /** Substrings that indicate a datetime/timestamp column — rarely a real PK */
 const DATETIME_HINTS = ['date', 'time', 'timestamp', 'created', 'modified', 'changed', 'updated'];
@@ -151,13 +151,16 @@ function detectPrimaryKeyCandidates(records, columns, sampleSize = 500) {
 
         const uniqueValues = new Set(values.map(v => String(v)));
 
-        // All sampled values must be unique
-        if (uniqueValues.size === values.length) {
-            const lowerCol = col.toLowerCase();
-            const hasIdSuffix = ID_SUFFIXES.some(s => lowerCol.endsWith(s));
-            const isDatetime = DATETIME_HINTS.some(h => lowerCol.includes(h));
+        const lowerCol = col.toLowerCase();
+        const hasIdSuffix = ID_SUFFIXES.some(s => lowerCol.endsWith(s));
+        const isDatetime = DATETIME_HINTS.some(h => lowerCol.includes(h));
+        const uniquenessRatio = uniqueValues.size / values.length;
 
-            // Priority: 0 = ID suffix (best), 1 = regular, 2 = datetime (worst)
+        // For ID-suffix columns: accept 95%+ uniqueness (merged partitions may have overlapping rows)
+        // For other columns: require 100% uniqueness
+        const threshold = hasIdSuffix ? 0.95 : 1.0;
+
+        if (uniquenessRatio >= threshold) {
             let priority;
             if (hasIdSuffix) priority = 0;
             else if (isDatetime) priority = 2;
