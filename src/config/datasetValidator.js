@@ -297,23 +297,24 @@ function validateForeignKeyConsistency(config, resolvedDataDir) {
 
         const parentSet = new Set(parentRows.map(r => compositeKey(r, parent.cols)));
 
-        // Sample first 10 child (to-side) rows
-        const childRows = getTableSample(child.table, 10);
+        // Sample child (to-side) rows — use larger sample for merged partition data
+        const childRows = getTableSample(child.table, 100);
 
         let checked = 0;
         let matched = 0;
 
-        for (let i = 0; i < Math.min(10, childRows.length); i++) {
+        for (let i = 0; i < Math.min(100, childRows.length); i++) {
             const key = compositeKey(childRows[i], child.cols);
             if (!key || key === '' || key.split('|').every(v => !v)) continue;
             checked++;
             if (parentSet.has(key)) matched++;
         }
 
-        // Auto-remove relationships with zero FK overlap instead of blocking upload
+        // Only remove if ZERO matches in 100 samples — very likely a bad relationship
+        // (e.g., totalNetAmount matching across tables)
         if (checked > 0 && matched === 0) {
             console.warn(`[VALIDATOR] Auto-removed bad relationship: ${rel.from} → ${rel.to} — 0 of ${checked} sampled rows matched.`);
-            continue; // Skip this relationship — don't add to validRelationships
+            continue;
         }
 
         validRelationships.push(rel);
