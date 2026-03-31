@@ -3,10 +3,17 @@ import axios from 'axios';
 import cytoscape from 'cytoscape';
 import './App.css';
 
-// Set JWT token on axios if available
+// Set JWT token on axios if available, verify it's still valid
 const savedToken = localStorage.getItem('authToken');
 if (savedToken) {
   axios.defaults.headers.common['Authorization'] = `Bearer ${savedToken}`;
+  // Verify token on startup — if invalid (redeploy changed JWT_SECRET), clear it
+  const API = import.meta.env.VITE_API_URL || '';
+  axios.get(`${API}/api/auth/me`).catch(() => {
+    localStorage.removeItem('authToken');
+    delete axios.defaults.headers.common['Authorization'];
+    window.location.reload();
+  });
 }
 
 class ErrorBoundary extends React.Component {
@@ -723,6 +730,11 @@ function App() {
 
   const handleAuth = (data) => {
     setAuthToken(data.token);
+    // Immediately fetch dataset info after auth (don't wait for useEffect)
+    setTimeout(() => {
+      fetchDatasetInfo();
+      fetchProviderHealth();
+    }, 500);
   };
 
   const handleLogout = () => {
