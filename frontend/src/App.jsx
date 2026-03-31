@@ -3,21 +3,11 @@ import axios from 'axios';
 import cytoscape from 'cytoscape';
 import './App.css';
 
-// Generate persistent tenant ID for multi-tenant isolation
-const tenantId = localStorage.getItem('tenantId') || (() => {
-  const id = crypto.randomUUID();
-  localStorage.setItem('tenantId', id);
-  return id;
-})();
-axios.defaults.headers.common['X-Tenant-Id'] = tenantId;
-
-// Auto-provision tenant on every app load (non-blocking, idempotent)
-// POST /api/tenants returns 409 if tenant already exists — that's fine.
-// This ensures tenant is always created even after server redeploys.
-(() => {
-  const API = import.meta.env.VITE_API_URL || '';
-  axios.post(`${API}/api/tenants`, { tenantId }).catch(() => {});
-})();
+// Set JWT token on axios if available
+const savedToken = localStorage.getItem('authToken');
+if (savedToken) {
+  axios.defaults.headers.common['Authorization'] = `Bearer ${savedToken}`;
+}
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -46,7 +36,78 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+function AuthScreen({ onAuth }) {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const API = import.meta.env.VITE_API_URL || '';
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
+      const res = await axios.post(`${API}${endpoint}`, { email, password });
+      if (res.data.success) {
+        localStorage.setItem('authToken', res.data.token);
+        axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;
+        onAuth(res.data);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Something went wrong.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-logo">O2C</div>
+        <h2 className="auth-title">Insight Engine</h2>
+        <p className="auth-subtitle">{isLogin ? 'Sign in to your account' : 'Create a new account'}</p>
+
+        <form onSubmit={handleSubmit} className="auth-form">
+          <input
+            type="email"
+            placeholder="Email address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="auth-input"
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={6}
+            className="auth-input"
+          />
+          <button type="submit" className="auth-btn" disabled={loading}>
+            {loading ? 'Please wait...' : isLogin ? 'Sign In' : 'Create Account'}
+          </button>
+        </form>
+
+        {error && <div className="auth-error">{error}</div>}
+
+        <div className="auth-switch">
+          {isLogin ? "Don't have an account? " : 'Already have an account? '}
+          <button className="auth-switch-btn" onClick={() => { setIsLogin(!isLogin); setError(null); }}>
+            {isLogin ? 'Sign up' : 'Sign in'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
+  const [authToken, setAuthToken] = useState(localStorage.getItem('authToken'));
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -639,6 +700,28 @@ function App() {
     return '#34d399'; // healthy
   };
 
+  const handleAuth = (data) => {
+    setAuthToken(data.token);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('authToken');
+    delete axios.defaults.headers.common['Authorization'];
+    setAuthToken(null);
+    setChatHistory([]);
+    setResultInfo(null);
+    setDatasetInfo(null);
+  };
+
+  // Auth gate — show login/register if not authenticated
+  if (!authToken) {
+    return (
+      <ErrorBoundary>
+        <AuthScreen onAuth={handleAuth} />
+      </ErrorBoundary>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* TOP NAV */}
@@ -670,6 +753,9 @@ function App() {
         )}
         <button className="nav-upload-btn" onClick={() => { resetOnboarding(); setShowUploadModal(true); }}>
           Switch Dataset
+        </button>
+        <button className="nav-logout-btn" onClick={handleLogout} title="Sign out">
+          Logout
         </button>
       </div>
 

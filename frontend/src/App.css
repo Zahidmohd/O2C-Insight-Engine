@@ -105,6 +105,140 @@ body, html {
   background: #3a5ce5;
 }
 
+.nav-logout-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b6b80;
+  background: transparent;
+  border: 1px solid #e8e8ef;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.nav-logout-btn:hover {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+/* ===================== AUTH SCREEN ===================== */
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f0f2ff 0%, #f7f8fa 50%, #ecfdf5 100%);
+}
+
+.auth-card {
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+  padding: 40px;
+  width: 380px;
+  max-width: 90vw;
+  text-align: center;
+}
+
+.auth-logo {
+  display: inline-block;
+  background: #4a6cf7;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 800;
+  padding: 8px 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.auth-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1a1a2e;
+  margin: 0 0 4px 0;
+}
+
+.auth-subtitle {
+  font-size: 13px;
+  color: #8b8fa3;
+  margin: 0 0 24px 0;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-input {
+  padding: 12px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  border: 1px solid #e8e8ef;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.auth-input:focus {
+  border-color: #4a6cf7;
+}
+
+.auth-btn {
+  padding: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #fff;
+  background: #4a6cf7;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.auth-btn:hover {
+  background: #3a5ce5;
+}
+
+.auth-btn:disabled {
+  background: #a0b0f0;
+  cursor: wait;
+}
+
+.auth-error {
+  margin-top: 12px;
+  padding: 10px;
+  font-size: 13px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+}
+
+.auth-switch {
+  margin-top: 16px;
+  font-size: 13px;
+  color: #8b8fa3;
+}
+
+.auth-switch-btn {
+  background: none;
+  border: none;
+  color: #4a6cf7;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.auth-switch-btn:hover {
+  color: #3a5ce5;
+}
+
 /* ===================== UPLOAD MODAL ===================== */
 .modal-overlay {
   position: fixed;

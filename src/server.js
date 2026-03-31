@@ -5,9 +5,12 @@ const path = require('path');
 const queryRoutes = require('./routes/queryRoutes');
 const documentRoutes = require('./routes/documentRoutes');
 const tenantRoutes = require('./routes/tenantRoutes');
+const authRoutes = require('./auth/authRoutes');
+const authMiddleware = require('./auth/authMiddleware');
 const tenantResolver = require('./middleware/tenantResolver');
 const db = require('./db/connection');
 const { initDocumentTables } = require('./rag/vectorStore');
+const { initAuthDb } = require('./auth/authDb');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -38,10 +41,14 @@ app.use((req, res, next) => {
     next();
 });
 
+// Auth middleware (JWT verification — exempt routes skip auth)
+app.use(authMiddleware(authRoutes.JWT_SECRET));
+
 // Tenant resolution (attaches req.db, req.tenantId, req.config)
 app.use(tenantResolver);
 
 // Routes
+app.use('/api', authRoutes);
 app.use('/api', tenantRoutes);
 app.use('/api', queryRoutes);
 app.use('/api', documentRoutes);
@@ -60,8 +67,9 @@ app.use((err, req, res, next) => {
     });
 });
 
-// Async startup — initialize document tables before listening
+// Async startup
 (async () => {
+    await initAuthDb();
     await initDocumentTables();
     const server = app.listen(PORT, () => {
         console.log(`🚀 API Server running on http://localhost:${PORT}`);
@@ -77,7 +85,6 @@ app.use((err, req, res, next) => {
         process.exit(1);
     });
 
-    // Graceful shutdown — close HTTP server and database connection
     function shutdown(signal) {
         console.log(`\n${signal} received. Shutting down gracefully...`);
         server.close(() => {
