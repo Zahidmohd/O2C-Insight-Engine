@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-The query engine translates natural language questions into SQL, executes them against SQLite, and returns structured results with graph visualization. It uses a multi-provider LLM system with health tracking, automatic failover, and complexity-based routing.
+The query engine translates natural language questions into SQL, executes them against a per-tenant Turso cloud database (or local SQLite for dev/tests), and returns structured results with graph visualization. It uses a multi-provider LLM system with health tracking, automatic failover, and complexity-based routing. The system dynamically adapts to any uploaded dataset — prompts, classification, graph extraction, and suggested queries all rebuild from the active config.
 
 ```
 User Query
@@ -325,14 +325,17 @@ The knowledge base uses dual-path retrieval for domain questions:
 When documents have been uploaded via `/api/documents/upload`:
 
 ```
-Query → Embed (Xenova/all-MiniLM-L6-v2, 384-dim) → Cosine similarity vs all chunks → Top 5 results
+Query → Embed (Xenova/all-MiniLM-L6-v2, 384-dim) → Vector search → Top 5 results
 ```
 
 - **Embedding model:** @huggingface/transformers (local, no API key needed)
-- **Storage:** SQLite tables (`documents`, `document_chunks`) with JSON-serialized embeddings
-- **Search:** Brute-force cosine similarity (~5-15ms for <10K chunks)
+- **Storage:** Turso: F32_BLOB(384) with DiskANN index / SQLite: JSON-serialized embeddings
+- **Search (3-layer fallback):**
+  1. `vector_top_k()` — Turso DiskANN indexed search (O(log n), fastest)
+  2. `vector_distance_cos()` — Turso native brute-force (no index required)
+  3. In-memory JS cosine similarity — SQLite fallback
 - **Threshold:** Minimum cosine similarity ≥ 0.3
-- **Persistence:** Document tables survive dataset switches
+- **Persistence:** Document tables survive dataset switches and redeploys
 
 ### 9.2 Keyword Fallback
 
@@ -345,7 +348,7 @@ If no documents are uploaded or vector search returns no matches:
 ### 9.3 Document Pipeline
 
 ```
-Upload (PDF/DOCX/TXT/MD) → Extract text → Chunk (500 chars, 50 overlap) → Embed → Store in SQLite
+Upload (PDF/DOCX/TXT/MD) → Extract text → Chunk (500 chars, 50 overlap) → Embed → Store (Turso F32_BLOB or SQLite JSON)
 ```
 
 | Component | Implementation |

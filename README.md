@@ -1,8 +1,10 @@
 # O2C Insight Engine
 
-An intelligent graph-based query engine that traverses SAP Order-to-Cash (O2C) datasets using natural language. Users ask plain-language questions and receive both a **natural language answer** and an **interactive graph visualization** of the business flow.
+A **zero-cost multi-tenant SaaS** that converts natural language questions into SQL queries, executes them against any dataset, and returns both a **natural language answer** and an **interactive graph visualization**. Ships with SAP Order-to-Cash (O2C) as the default dataset — users can upload their own CSV/JSONL/ZIP data or PDF/DOCX documents at any time.
 
-**Core Flow:** SalesOrder → Delivery → Billing → JournalEntry → Payment
+**Default Flow:** SalesOrder → Delivery → Billing → JournalEntry → Payment
+
+**Stack:** Node.js + React + Turso (per-tenant cloud SQLite) + 5 LLM providers + Local embeddings — **100% free tier, zero paid services.**
 
 ---
 
@@ -342,9 +344,9 @@ When a RAG or HYBRID query comes in:
 | **Embedding model** | Xenova/all-MiniLM-L6-v2 (384-dim, ONNX/WASM via @huggingface/transformers) |
 | **Text extraction** | pdf-parse (PDF), officeparser (DOCX), fs.readFile (TXT/MD) |
 | **Chunking** | Recursive character splitter with separator hierarchy: `\n\n` → `\n` → `. ` → ` ` |
-| **Vector store** | SQLite tables (`documents`, `document_chunks`) with JSON-serialized embeddings |
-| **Search** | Brute-force cosine similarity in JS (~5-15ms for <10K chunks) |
-| **Persistence** | Document tables survive dataset switches (excluded from DROP during onboarding) |
+| **Vector store** | Turso: F32_BLOB(384) with DiskANN index / SQLite: JSON embeddings |
+| **Search** | Turso: `vector_top_k()` indexed search → `vector_distance_cos()` fallback → In-memory JS cosine |
+| **Persistence** | Document tables survive dataset switches and redeploys |
 
 ---
 
@@ -509,9 +511,9 @@ Delete a tenant and destroy their Turso database (if Turso API is configured).
 
 ---
 
-## Dataset
+## Default Dataset
 
-19 JSONL tables from SAP S/4HANA Order-to-Cash process:
+Ships with 19 JSONL tables from SAP S/4HANA Order-to-Cash process (users can upload any dataset via the wizard):
 - **10 Transactional:** sales_order_headers/items, outbound_delivery_headers/items, billing_document_headers/items/cancellations, journal_entry_items, payments, schedule_lines
 - **9 Master Data:** business_partners, addresses, customer_company/sales_area_assignments, products, product_descriptions, plants, product_plants, product_storage_locations
 
@@ -558,14 +560,31 @@ Example server log:
 
 ---
 
+## Zero-Cost Architecture
+
+Every component runs on free-tier services — no credit card required.
+
+| Component | Service | Free Tier |
+|-----------|---------|-----------|
+| **Hosting** | Render | Free web service |
+| **Database** | Turso (per-tenant cloud SQLite) | 500 DBs, 9GB, 25M reads/month |
+| **Vector Search** | Turso native (F32_BLOB + DiskANN) | Included in Turso free tier |
+| **Embeddings** | HuggingFace Transformers.js (local) | No API calls, runs on server |
+| **LLM Providers** | NVIDIA, Cerebras, Groq, OpenRouter, SambaNova | Free-tier API keys |
+| **Auth** | UUID in localStorage | No auth service needed |
+| **File Storage** | Turso (documents stored as chunks) | Included in Turso free tier |
+
+---
+
 ## Limitations
 
 - **LLM Non-Determinism** — SQL generation may occasionally vary across runs; few-shot examples mitigate but don't fully eliminate this
 - **No Conversation Memory** — Each query is independent; follow-up questions don't have prior context
-- **Turso Free Tier** — 500 databases, 9GB storage, 25M row reads/month. Sufficient for demos and small-scale usage.
+- **Turso Free Tier** — 500 databases, 9GB storage, 25M row reads/month. Sufficient for demos and small-scale usage
 - **Free-Tier Rate Limits** — Provider availability depends on remaining API quota; complex queries may fail during rate limit windows
 - **Fallback SQL** — Keyword-to-table matching can only produce simple SELECT queries, not multi-hop JOINs
-- **No Authentication** — Tenant isolation uses UUID tokens in localStorage, not real user auth. Anyone with a tenant ID can access that tenant's data.
+- **No Authentication** — Tenant isolation uses UUID tokens in localStorage, not real user auth
+- **First 60s After Deploy** — New tenants use global SQLite while Turso DB initializes in background; fully transparent to the user
 
 ---
 
