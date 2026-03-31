@@ -160,7 +160,9 @@ async function tryRuleBasedQuery(query, tag, options) {
         reason: result.rowCount > 0 ? 'DATA_FOUND' : 'NO_DATA',
         message: result.rowCount === 0 ? 'No records found.' : null,
         suggestions: [],
-        nlAnswer: null,
+        nlAnswer: result.rowCount > 0
+            ? `Found ${result.rowCount} ${(config.tables.find(t => t.name === matchedTable.name)?.displayName || matchedTable.name.replace(/_/g, ' '))} record${result.rowCount !== 1 ? 's' : ''}.`
+            : null,
         explanation,
         confidence: confidence.score,
         confidenceLabel: confidence.label,
