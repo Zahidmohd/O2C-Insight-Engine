@@ -157,14 +157,19 @@ function App() {
       .catch(() => {});
   };
 
-  // Fetch active dataset metadata + provider health on mount
+  // Fetch active dataset metadata + provider health when authenticated
   useEffect(() => {
+    if (!authToken) return;
     fetchDatasetInfo();
     fetchProviderHealth();
+    // Retry dataset info a few times (tenant DB initializes in background ~30-60s)
+    const retry1 = setTimeout(fetchDatasetInfo, 3000);
+    const retry2 = setTimeout(fetchDatasetInfo, 10000);
+    const retry3 = setTimeout(fetchDatasetInfo, 30000);
     // Refresh provider health every 30s
     const interval = setInterval(fetchProviderHealth, 30000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => { clearInterval(interval); clearTimeout(retry1); clearTimeout(retry2); clearTimeout(retry3); };
+  }, [authToken]);
 
   // Refresh provider health after each query
   useEffect(() => {

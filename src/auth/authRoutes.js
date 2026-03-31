@@ -35,9 +35,9 @@ router.post('/auth/register', async (req, res) => {
         }
 
         // Check if email already exists
-        const existing = await authGet('SELECT id FROM users WHERE email = ?', [email.toLowerCase().trim()]);
+        const existing = await authGet('SELECT id, tenant_id FROM users WHERE email = ?', [email.toLowerCase().trim()]);
         if (existing) {
-            return res.status(409).json({ success: false, error: { message: 'Email already registered.', type: 'CONFLICT' } });
+            return res.status(409).json({ success: false, error: { message: 'Email already registered. Please sign in.', type: 'CONFLICT' } });
         }
 
         // Generate tenant ID and hash password
@@ -83,11 +83,13 @@ router.post('/auth/login', async (req, res) => {
 
         const user = await authGet('SELECT id, email, password_hash, tenant_id FROM users WHERE email = ?', [email.toLowerCase().trim()]);
         if (!user) {
+            console.warn(`[AUTH] Login failed — email not found: ${email}`);
             return res.status(401).json({ success: false, error: { message: 'Invalid email or password.', type: 'AUTH_ERROR' } });
         }
 
         const valid = await bcrypt.compare(password, user.password_hash);
         if (!valid) {
+            console.warn(`[AUTH] Login failed — wrong password for: ${email}`);
             return res.status(401).json({ success: false, error: { message: 'Invalid email or password.', type: 'AUTH_ERROR' } });
         }
 
