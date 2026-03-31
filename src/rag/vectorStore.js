@@ -45,11 +45,10 @@ async function initDocumentTables(dbConn = db) {
             CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id);
         `);
 
-        // Create vector index (separate statement — may fail if already exists)
+        // Recreate vector index (drop + create avoids corrupted empty-table index)
         try {
-            await dbConn.execAsync(`
-                CREATE INDEX IF NOT EXISTS chunk_vec_idx ON document_chunks(libsql_vector_idx(embedding));
-            `);
+            await dbConn.execAsync(`DROP INDEX IF EXISTS chunk_vec_idx;`);
+            await dbConn.execAsync(`CREATE INDEX chunk_vec_idx ON document_chunks(libsql_vector_idx(embedding));`);
             console.log('[VECTOR_STORE] Turso vector index created.');
         } catch (err) {
             console.warn('[VECTOR_STORE] Vector index creation skipped:', err.message);
@@ -103,9 +102,11 @@ async function insertChunks(dbConn = db, documentId, chunks) {
 
         if (isTurso) {
             // Turso: store in both F32_BLOB (for vector search) and JSON (for fallback)
+            // Format as "[0.1234,0.5678,...]" for vector32()
+            const embStr = '[' + Array.from(chunk.embedding).map(v => Number(v).toFixed(6)).join(',') + ']';
             statements.push({
                 sql: 'INSERT INTO document_chunks (document_id, chunk_index, text, embedding, embedding_json) VALUES (?, ?, ?, vector32(?), ?)',
-                args: [documentId, chunk.index, chunk.text, embeddingJson, embeddingJson]
+                args: [documentId, chunk.index, chunk.text, embStr, embeddingJson]
             });
         } else {
             // SQLite: JSON string only
@@ -155,19 +156,21 @@ function cosineSimilarity(a, b) {
  * Returns top-K chunks by vector similarity (indexed, O(log n)).
  */
 async function tursoVectorSearch(dbConn, queryEmbedding, topK = 5) {
-    const embeddingJson = JSON.stringify(Array.from(queryEmbedding));
+    // Format as JSON array string: "[0.1234,0.5678,...]"
+    const embStr = '[' + Array.from(queryEmbedding).map(v => v.toFixed(6)).join(',') + ']';
 
     const rows = await dbConn.allAsync(`
-        SELECT dc.text, d.title as documentTitle
-        FROM vector_top_k('chunk_vec_idx', vector32(?), ?) AS vt
+        SELECT dc.text, d.title as documentTitle,
+               vector_distance_cos(dc.embedding, vector32(?)) as distance
+        FROM vector_top_k('chunk_vec_idx', vector32(?), ${Number(topK)}) AS vt
         JOIN document_chunks dc ON dc.rowid = vt.id
         JOIN documents d ON dc.document_id = d.id
-    `, [embeddingJson, topK]);
+    `, [embStr, embStr]);
 
-    // vector_top_k returns results ordered by similarity (best first)
-    return rows.map((r, i) => ({
+    // Convert distance (0=identical, 2=opposite) to score (1=identical, 0=orthogonal)
+    return rows.map(r => ({
         text: r.text,
-        score: 1.0 - (i * 0.05), // approximate score from rank position
+        score: 1.0 - (r.distance || 0),
         documentTitle: r.documentTitle
     }));
 }
