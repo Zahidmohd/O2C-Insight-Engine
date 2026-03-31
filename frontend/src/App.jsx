@@ -346,12 +346,14 @@ function App() {
         'Count all delivery documents',
       ];
     }
-    // Generic examples from table names
-    const tables = datasetInfo.tables || [];
+    // Generate diverse examples from table names
+    const tables = (datasetInfo.tables || []).slice(0, 5);
     const examples = [];
-    if (tables.length > 0) examples.push(`Show all ${tables[0].displayName || tables[0].name}`);
-    if (tables.length > 1) examples.push(`Count all ${tables[1].displayName || tables[1].name}`);
-    if (tables.length > 0) examples.push(`List ${tables[0].displayName || tables[0].name} with filters`);
+    const name = (t) => t.displayName || t.name.replace(/_/g, ' ');
+    if (tables.length > 0) examples.push(`Top 5 ${name(tables[0])} by count`);
+    if (tables.length > 1) examples.push(`Show all ${name(tables[1])}`);
+    if (tables.length > 2) examples.push(`Count all ${name(tables[2])}`);
+    if (tables.length > 3) examples.push(`Find ${name(tables[3])} with details`);
     return examples;
   };
 
