@@ -1,14 +1,16 @@
-# Graph Model Design — SAP Order-to-Cash
+# Graph Model Design — SAP Order-to-Cash (Demo Dataset)
 
 > **Date:** 2026-03-23
 > **Status:** ✅ Complete
 > **Source of truth:** [dataset-analysis.md](./dataset-analysis.md)
 
+> **Note:** This document describes the graph model for the **demo SAP O2C dataset** included with the project. The O2C Insight Engine supports graph extraction from **any relational dataset**. When users upload their own data, the graph extractor reads relationships from the active dataset config and dynamically builds nodes and edges. The patterns described here (header-level edges, item-level joins, composite keys) informed the generic graph extraction logic.
+
 ---
 
 ## 1. Design Philosophy
 
-The graph model abstracts SAP's table-level complexity into **clean business-level entities**.
+The graph model abstracts SAP's table-level complexity into **clean business-level entities**. For the demo O2C dataset, this means mapping 19 tables into 8 node types and 12 edge types. For user-uploaded datasets, the system auto-generates node types from table names and edge types from detected relationships.
 
 **Key principles:**
 - **Nodes = Business objects** (not individual tables)
@@ -21,7 +23,7 @@ The graph model abstracts SAP's table-level complexity into **clean business-lev
 
 ## 2. Node Definitions
 
-### 2.1 Core O2C Nodes
+### 2.1 Demo Dataset: Core O2C Nodes
 
 | Node Type | Business Meaning | Underlying Tables | Primary Identifier |
 |-----------|-----------------|-------------------|--------------------|
@@ -31,7 +33,7 @@ The graph model abstracts SAP's table-level complexity into **clean business-lev
 | **JournalEntry** | Financial accounting posting (AR) | `journal_entry_items_accounts_receivable` | `companyCode` + `fiscalYear` + `accountingDocument` (e.g., "ABCD/2025/9400000249") |
 | **Payment** | Customer payment posting | `payments_accounts_receivable` | `companyCode` + `fiscalYear` + `accountingDocument` (e.g., "ABCD/2025/9400000220") |
 
-### 2.2 Master Data Nodes
+### 2.2 Demo Dataset: Master Data Nodes
 
 | Node Type | Business Meaning | Underlying Tables | Primary Identifier |
 |-----------|-----------------|-------------------|--------------------|

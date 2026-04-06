@@ -4,6 +4,8 @@
 > **Status:** ✅ Complete
 > **Dependencies:** [dataset-analysis.md](./dataset-analysis.md), [graph-model.md](./graph-model.md)
 
+> **Note:** This document describes the schema for the **demo SAP O2C dataset** included with the project for testing and demonstration. The O2C Insight Engine is dataset-agnostic — when users upload their own data (CSV/JSONL/ZIP), the system auto-infers schema, relationships, and indexes from the uploaded files. The principles and patterns described here informed the auto-inference system's design.
+
 ---
 
 ## 1. Design Principles
@@ -65,7 +67,7 @@ referenceSdDocumentItem = referenceSdDocumentItem.padStart(6, '0');
 
 ## 3. CREATE TABLE Statements
 
-### 3.1 Core O2C Tables
+### 3.1 Demo Dataset: Core O2C Tables
 
 ```sql
 -- ============================================================
@@ -277,7 +279,7 @@ CREATE TABLE IF NOT EXISTS payments_accounts_receivable (
 );
 ```
 
-### 3.2 Master Data Tables
+### 3.2 Demo Dataset: Master Data Tables
 
 ```sql
 -- ============================================================
@@ -543,15 +545,15 @@ CREATE INDEX idx_psl_plant ON product_storage_locations(plant);
 ```
 src/
   db/
-    schema.sql         ← All CREATE TABLE + CREATE INDEX statements
-    loader.js          ← Main data loading script
-    connection.js      ← SQLite connection manager
+    schema.sql              ← All CREATE TABLE + CREATE INDEX statements
+    loader.ts               ← Main data loading script (TypeScript)
+    connection.service.ts   ← SQLite connection manager (NestJS service)
 ```
 
 ### 5.2 Loader Design
 
-```javascript
-// loader.js — Pseudocode structure
+```typescript
+// loader.ts — Pseudocode structure (demo dataset loader)
 
 const TABLES = [
   {
@@ -675,7 +677,7 @@ const TABLES = [
 - SQLite's max compound SELECT is 500 by default, so 100 is safe
 
 **Transaction Strategy:**
-```javascript
+```typescript
 // Wrap each table's entire load in a transaction
 db.exec('BEGIN TRANSACTION');
 // ... batch inserts ...
@@ -685,7 +687,7 @@ db.exec('COMMIT');
 - SQLite is ~50x faster with transactions vs. auto-commit per row
 
 **Error Handling:**
-```javascript
+```typescript
 try {
   // load table
 } catch (err) {
@@ -804,22 +806,24 @@ JOIN journal_entry_items_accounts_receivable je
 
 ```
 project/
-├── data/                          ← Raw JSONL files (existing directories)
+├── data/                          ← Raw JSONL files (demo SAP O2C dataset)
 │   ├── sales_order_headers/
 │   ├── sales_order_items/
 │   ├── ...
 │
 ├── src/
+│   ├── main.ts                    ← NestJS entry point
 │   └── db/
+│       ├── db.module.ts           ← Database module definition
 │       ├── schema.sql             ← All CREATE TABLE + CREATE INDEX
-│       ├── connection.js          ← SQLite connection factory
-│       └── loader.js              ← JSONL → SQLite ingestion script
+│       ├── connection.service.ts  ← SQLite connection factory (NestJS service)
+│       └── loader.ts              ← JSONL → SQLite ingestion script (TypeScript)
 │
 ├── docs/
-│   ├── dataset-analysis.md
-│   ├── graph-model.md
+│   ├── dataset-analysis.md        ← Demo dataset analysis
+│   ├── graph-model.md             ← Demo dataset graph model
 │   ├── schema-design.md           ← This document
 │   └── ai-session-log.md
 │
-└── sap_otc.db                     ← Generated SQLite database
+└── sap_otc.db                     ← Generated SQLite database (demo data)
 ```

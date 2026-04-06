@@ -1,15 +1,19 @@
 # O2C-Insight-Engine — Manual Testing Guide
 
-Run the server first: `npm start`
+> **Note:** The test examples below use the **demo SAP O2C dataset** that ships with the project. The O2C Insight Engine is dataset-agnostic — these examples validate the query pipeline using realistic enterprise data. When testing with your own uploaded dataset, substitute the entity names, document IDs, and expected results accordingly.
+
+Run the server first: `npm start` (compiles TypeScript via NestJS and starts `main.ts`)
 Open the UI at: `http://localhost:3000`
 Or test the API directly with any HTTP client (Postman, curl, etc.)
+
+Test files are written in TypeScript (e.g., `*.spec.ts`).
 
 ---
 
 ## HOW TO READ THIS GUIDE
 
 Each test shows:
-- **Query** — type this into the chat box
+- **Query** — type this into the chat box (uses the demo SAP O2C dataset)
 - **Expected** — what you should see in the response
 
 ---
@@ -88,9 +92,9 @@ No graph shown
 
 ---
 
-## 3. RAG QUERIES (Knowledge Base Explanations)
+## 3. RAG QUERIES (Auto-Generated Knowledge Base)
 
-These return concept explanations. No SQL runs, no graph shown.
+These return concept explanations from the auto-generated knowledge base. No SQL runs, no graph shown.
 
 ---
 
@@ -238,7 +242,7 @@ confidence < 1.00
 
 ---
 
-## 5. SQL QUERIES — FLOW TRACES
+## 5. SQL QUERIES — FLOW TRACES (Demo SAP O2C Dataset)
 
 ---
 
@@ -292,7 +296,7 @@ Graph: full chain if all stages exist
 
 ---
 
-## 6. SQL QUERIES — AGGREGATIONS
+## 6. SQL QUERIES — AGGREGATIONS (Demo Dataset)
 
 ---
 
@@ -363,7 +367,7 @@ confidence: 0.90
 
 ---
 
-## 7. SQL QUERIES — GAP / EXCEPTION ANALYSIS
+## 7. SQL QUERIES — GAP / EXCEPTION ANALYSIS (Demo Dataset)
 
 ---
 
@@ -418,7 +422,7 @@ Graph: BillingDocument nodes with no JournalEntry link
 
 ---
 
-## 8. SQL QUERIES — CUSTOMER LOOKUPS
+## 8. SQL QUERIES — CUSTOMER LOOKUPS (Demo Dataset)
 
 ---
 

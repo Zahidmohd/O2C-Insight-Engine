@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-The query engine translates natural language questions into SQL, executes them against a per-tenant Turso cloud database (or local SQLite for dev/tests), and returns structured results with graph visualization. It uses a multi-provider LLM system with health tracking, automatic failover, and complexity-based routing. The system dynamically adapts to any uploaded dataset — prompts, classification, graph extraction, and suggested queries all rebuild from the active config.
+The query engine translates natural language questions into SQL, executes them against a per-tenant Turso cloud database (or local SQLite for dev/tests), and returns structured results with graph visualization. Built with NestJS and TypeScript, it uses a multi-provider LLM system with health tracking, automatic failover, and complexity-based routing. A Redis cache layer (Cache-Aside pattern, 5-min TTL, graceful in-memory fallback) sits in front of the query pipeline to avoid redundant LLM calls. The system dynamically adapts to any uploaded dataset — prompts, classification, graph extraction, and suggested queries all rebuild from the active config. An auto-generated knowledge base is built from each dataset's schema and relationships, replacing the need for hand-curated domain entries.
 
 ```
 User Query
@@ -69,7 +69,7 @@ User Query
 
 Each provider maintains a health record:
 
-```javascript
+```typescript
 {
   successes: 0,    // Total successful calls
   failures: 0,     // Total failed calls
@@ -210,9 +210,9 @@ The JOIN relaxation step converts `JOIN` to `LEFT JOIN` for known high-drop tabl
 
 ## 6. Graph Extraction
 
-### 6.1 O2C-Specific Extraction
+### 6.1 Demo Dataset Extraction (SAP O2C)
 
-For the default SAP O2C dataset, the graph extractor uses hardcoded entity recognition:
+For the included demo SAP O2C dataset, the graph extractor uses hardcoded entity recognition:
 
 - Detects SalesOrder, Delivery, BillingDocument, JournalEntry, Payment, Customer nodes
 - Builds edges based on known O2C relationships (FULFILLED_BY, BILLED_AS, etc.)
@@ -297,6 +297,12 @@ Config Generation
 | `GET` | `/api/tenants` | List registered tenants |
 | `DELETE` | `/api/tenants/:id` | Delete tenant + destroy Turso DB |
 
+| `GET` | `/api/metrics` | System metrics: uptime, cache stats, latency P50/P95/P99 |
+| `POST` | `/api/team/create` | Create organization (team workspace) |
+| `POST` | `/api/team/join` | Join organization via invite code |
+| `GET` | `/api/team/members` | List team members |
+| `POST` | `/api/team/switch` | Switch between personal and team workspace |
+
 ### 8.1 Query Response Shape
 
 ```json
@@ -340,11 +346,16 @@ Query → Embed (Xenova/all-MiniLM-L6-v2, 384-dim) → Vector search → Top 5 r
 - **Threshold:** Minimum cosine similarity ≥ 0.3
 - **Persistence:** Document tables survive dataset switches and redeploys
 
-### 9.2 Keyword Fallback
+### 9.2 Auto-Generated Knowledge Base
+
+When a dataset is uploaded (or the demo SAP O2C dataset is loaded), the system automatically generates knowledge base entries from:
+- Table names and their column structures
+- Detected relationships and join paths
+- Schema-exploration queries (suggested queries derived from the dataset)
 
 If no documents are uploaded or vector search returns no matches:
 
-- **Matching:** Word-boundary regex against 10 curated SAP O2C knowledge entries
+- **Matching:** Word-boundary regex against auto-generated knowledge entries for the active dataset
 - **Fallback:** If no keyword match, RAG queries return "no context found"
 - **Hybrid mode:** For HYBRID queries, both RAG context and SQL results are combined
 
@@ -387,41 +398,64 @@ Every query logs:
 
 ```
 src/
+├── main.ts                          ← NestJS entry point (bootstrap)
+├── app.module.ts                    ← Root module (imports all feature modules)
 ├── query/
-│   ├── queryService.js          ← Main orchestrator (classify → generate → validate → execute)
-│   ├── llmClient.js             ← 5-provider LLM client with health tracking
-│   ├── promptBuilder.js         ← Schema-aware prompt construction
-│   ├── queryClassifier.js       ← SQL / RAG / HYBRID / INVALID classification
-│   ├── complexityClassifier.js  ← SIMPLE / MODERATE / COMPLEX scoring
-│   ├── graphExtractor.js        ← SQL results → Cytoscape graph (O2C + generic)
-│   └── sqlExecutor.js           ← Execute SQL with retry + JOIN relaxation
+│   ├── query.module.ts              ← Query module definition
+│   ├── query.service.ts             ← Main orchestrator (classify → generate → validate → execute)
+│   ├── query.controller.ts          ← Query API endpoints
+│   ├── llm-client.service.ts        ← 5-provider LLM client with health tracking
+│   ├── prompt-builder.service.ts    ← Schema-aware prompt construction
+│   ├── query-classifier.service.ts  ← SQL / RAG / HYBRID / INVALID classification
+│   ├── complexity-classifier.service.ts ← SIMPLE / MODERATE / COMPLEX scoring
+│   ├── graph-extractor.service.ts   ← SQL results → Cytoscape graph (generic + demo O2C)
+│   └── sql-executor.service.ts      ← Execute SQL with retry + JOIN relaxation
 ├── rag/
-│   ├── knowledgeBase.js         ← Dual-path retrieval (vector search + keyword fallback)
-│   ├── vectorStore.js           ← SQLite document/chunk tables + cosine similarity
-│   ├── embeddingService.js      ← Local HF embeddings (Xenova/all-MiniLM-L6-v2)
-│   ├── documentExtractor.js     ← PDF/DOCX/TXT/MD text extraction
-│   ├── chunker.js               ← Recursive character text splitter
-│   └── zipExtractor.js          ← ZIP archive extraction for dataset uploads
+│   ├── rag.module.ts                ← RAG module definition
+│   ├── knowledge-base.service.ts    ← Dual-path retrieval (vector search + auto-generated KB)
+│   ├── vector-store.service.ts      ← SQLite document/chunk tables + cosine similarity
+│   ├── embedding.service.ts         ← Local HF embeddings (Xenova/all-MiniLM-L6-v2)
+│   ├── document-extractor.service.ts ← PDF/DOCX/TXT/MD text extraction
+│   ├── chunker.service.ts           ← Recursive character text splitter
+│   └── zip-extractor.service.ts     ← ZIP archive extraction for dataset uploads
 ├── auth/
-│   ├── authDb.js                ← Shared Turso auth DB for user credentials
-│   ├── authRoutes.js            ← Register, login, verify endpoints
-│   └── authMiddleware.js        ← JWT verification middleware
-├── middleware/
-│   └── tenantResolver.js        ← Resolves tenantId from JWT → req.db + req.config
+│   ├── auth.module.ts               ← Auth module definition
+│   ├── auth.service.ts              ← User registration, login, JWT handling
+│   ├── auth.controller.ts           ← Register, login, verify endpoints
+│   └── auth.guard.ts               ← JWT verification guard
+├── tenant/
+│   ├── tenant.module.ts             ← Tenant module definition
+│   ├── tenant.service.ts            ← Resolves tenantId → DB + config
+│   └── tenant.controller.ts         ← Tenant CRUD + Turso auto-provisioning
+├── team/
+│   ├── team.module.ts               ← Team module definition
+│   ├── team.service.ts              ← Organizations, invite codes, workspace switching
+│   └── team.controller.ts           ← Team API endpoints
+├── metrics/
+│   ├── metrics.module.ts            ← Metrics module definition
+│   ├── metrics.service.ts           ← Uptime, cache stats, latency P50/P95/P99
+│   └── metrics.controller.ts        ← GET /api/metrics endpoint
 ├── config/
-│   └── datasetConfig.js         ← Global + per-tenant config management
+│   └── dataset-config.service.ts    ← Global + per-tenant config management
 ├── onboarding/
-│   ├── schemaInference.js       ← Parse JSONL/CSV, infer tables + columns + PK
-│   ├── relationshipInference.js ← Suggest relationships with confidence scores
-│   └── configGenerator.js       ← Generate full config from approved schema
+│   ├── onboarding.module.ts         ← Onboarding module definition
+│   ├── schema-inference.service.ts  ← Parse JSONL/CSV, infer tables + columns + PK
+│   ├── relationship-inference.service.ts ← Suggest relationships with confidence scores
+│   └── config-generator.service.ts  ← Generate full config from approved schema
 ├── db/
-│   ├── connection.js            ← Global SQLite connection (dev/tests fallback)
-│   ├── tursoAdapter.js          ← Turso/LibSQL adapter (async, matches SQLite API)
-│   ├── tenantRegistry.js        ← Tenant → Turso credentials + connection pool
-│   ├── schema.sql               ← CREATE TABLE + CREATE INDEX statements
-│   └── loader.js                ← JSONL → DB ingestion (SQLite + Turso compatible)
-└── routes/
-    ├── queryRoutes.js           ← Express routes (query, upload, providers)
-    ├── documentRoutes.js        ← Document upload/list/delete API
-    └── tenantRoutes.js          ← Tenant CRUD + Turso auto-provisioning
+│   ├── db.module.ts                 ← Database module definition
+│   ├── connection.service.ts        ← Global SQLite connection (dev/tests fallback)
+│   ├── turso-adapter.service.ts     ← Turso/LibSQL adapter (async, matches SQLite API)
+│   ├── tenant-registry.service.ts   ← Tenant → Turso credentials + connection pool
+│   ├── redis.service.ts             ← Redis Cache-Aside (5-min TTL, in-memory fallback)
+│   ├── schema.sql                   ← CREATE TABLE + CREATE INDEX statements
+│   └── loader.ts                    ← JSONL → DB ingestion (SQLite + Turso compatible)
+├── jobs/
+│   ├── dataset-processing.worker.ts   ← BullMQ worker: dataset processing
+│   ├── embedding-generation.worker.ts ← BullMQ worker: embedding generation
+│   └── tenant-provisioning.worker.ts  ← BullMQ worker: tenant provisioning
+└── dataset/
+    ├── dataset.module.ts            ← Dataset module definition
+    ├── dataset.service.ts           ← Dataset upload, config management
+    └── dataset.controller.ts        ← Dataset API endpoints
 ```

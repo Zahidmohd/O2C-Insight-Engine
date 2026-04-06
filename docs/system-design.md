@@ -41,18 +41,56 @@ Paid embedding APIs (OpenAI, Cohere) cost money per request. HuggingFace Transfo
 - Zero API cost
 - Works offline
 
-### 4. Why JWT over Sessions?
+### 4. Why NestJS over Express?
+
+| Factor | NestJS | Express |
+|--------|--------|---------|
+| Architecture | Modular (10 feature modules) | Flat route files |
+| Type safety | TypeScript-first, decorators, DTOs | Requires manual typing |
+| Dependency injection | Built-in DI container | Manual wiring |
+| Testability | Module isolation, easy mocking | Requires test setup |
+| Code organization | Enforced module boundaries | Convention-dependent |
+| Middleware | Guards, interceptors, pipes | Middleware functions |
+
+**Decision:** NestJS with TypeScript. The codebase grew to 10 modules (Auth, Tenant, Query, RAG, Team, Metrics, Onboarding, Dataset, DB, Health). NestJS's module system keeps each concern isolated with clear dependency boundaries. Entry point is `main.ts`.
+
+### 5. Why JWT over Sessions?
 
 | Factor | JWT | Sessions |
 |--------|-----|----------|
-| State | Stateless (token contains all info) | Requires session store (Redis) |
-| Cost | Zero (token stored client-side) | Redis costs money |
+| State | Stateless (token contains all info) | Requires session store |
+| Cost | Zero (token stored client-side) | Additional infra |
 | Scaling | Works across multiple servers | Needs shared session store |
-| Simplicity | One middleware function | Session management + cleanup |
+| Simplicity | One guard function | Session management + cleanup |
 
 **Decision:** JWT with bcrypt password hashing. Token contains `{ email, tenantId }`, expires in 30 days.
 
-### 5. Why Not a Graph Database?
+### 6. Why Redis for Caching?
+
+| Factor | Redis | In-Memory Only |
+|--------|-------|----------------|
+| Persistence | Survives restarts | Lost on deploy |
+| Shared state | Works across workers | Per-process only |
+| TTL management | Native TTL support | Manual expiry |
+| BullMQ backing | Required for job queues | Not compatible |
+
+**Decision:** Redis with Cache-Aside pattern (5-minute TTL). Graceful fallback to in-memory LRU cache if Redis is unavailable. This means the system works even without Redis — it just loses cache persistence.
+
+### 7. Why BullMQ for Background Jobs?
+
+| Factor | BullMQ | In-Process |
+|--------|--------|------------|
+| Reliability | Retries, dead-letter queues | Lost on crash |
+| Concurrency | Rate-limited workers | Blocks event loop |
+| Observability | Job status, progress tracking | Console logs only |
+| Scaling | Add workers independently | Scale entire server |
+
+**Decision:** 3 BullMQ workers backed by Redis:
+- **dataset-processing** — parse and load uploaded CSV/JSONL/ZIP files
+- **embedding-generation** — chunk documents and generate vector embeddings
+- **tenant-provisioning** — create and initialize Turso databases
+
+### 8. Why Not a Graph Database?
 
 | Factor | SQLite | Neo4j/Graph DB |
 |--------|--------|----------------|
@@ -72,25 +110,31 @@ User Question
     │
     ▼
 ┌──────────────────────────────────────────────────────┐
-│                   API Layer                           │
-│  Auth Middleware (JWT) → Tenant Resolver (req.db)    │
+│             API Layer (NestJS Guards + Pipes)         │
+│  Auth Guard (JWT) → Tenant Resolver (req.db)         │
 └──────────────────────┬───────────────────────────────┘
+                       │
+    ┌──────────────────▼──────────────────┐
+    │   Redis Cache Check (Cache-Aside)    │
+    │   Hit? → Return cached result        │
+    │   Miss? ↓                            │
+    └──────────────────┬──────────────────┘
                        │
     ┌──────────────────▼──────────────────┐
     │          Query Pipeline              │
     │                                      │
-    │  1. Cache Check (tenant-scoped)      │
-    │  2. Query Classification             │
+    │  1. Query Classification             │
     │     └─ SQL / RAG / HYBRID / INVALID  │
-    │  3. Complexity Scoring               │
+    │  2. Complexity Scoring               │
     │     └─ SIMPLE / MODERATE / COMPLEX   │
-    │  4. Guardrails (intent + domain)     │
-    │  5. SQL Generation (5 LLM providers) │
-    │  6. SQL Validation (13 layers)       │
-    │  7. Execution (tenant's Turso DB)    │
-    │  8. Graph Extraction                 │
-    │  9. NL Answer Generation             │
-    │  10. Response Assembly               │
+    │  3. Guardrails (intent + domain)     │
+    │  4. SQL Generation (5 LLM providers) │
+    │  5. SQL Validation (13 layers)       │
+    │  6. Execution (tenant's Turso DB)    │
+    │  7. Graph Extraction                 │
+    │  8. NL Answer Generation             │
+    │  9. Response Assembly                │
+    │  10. Cache Store (5-min TTL)         │
     └──────────────────┬──────────────────┘
                        │
     ┌──────────────────▼──────────────────┐
@@ -114,6 +158,8 @@ User Question
 | Tenant not initialized | initialized === false | Use global SQLite until ready |
 | Invalid JWT | jwt.verify fails | Return 401 |
 | Document embedding fails | Catch in upload | Return error, data not lost |
+| Redis unavailable | Connection error | Graceful fallback to in-memory cache |
+| BullMQ job fails | Worker error handler | Automatic retry with backoff |
 
 ---
 
@@ -127,6 +173,7 @@ User Question
 | LLM requests | ~150 RPM (combined) | 2 per query (SQL + NL answer) |
 | Render RAM | 512 MB | ~200 MB (Node + embedding model) |
 | Render disk | Ephemeral | Global SQLite only (tenant data in Turso) |
+| Redis memory | ~25 MB (free tier) | ~1 KB per cached query result |
 
 **Max concurrent users:** ~250 (limited by Turso DB count)
 **Max queries/minute:** ~75 (limited by LLM rate limits)
@@ -145,3 +192,4 @@ User Question
 | **CORS** | Whitelist-based origin checking |
 | **Headers** | Helmet.js security headers |
 | **Data isolation** | Per-tenant Turso cloud DB (no shared tables) |
+| **Team isolation** | Organization-scoped workspaces with invite-code access |

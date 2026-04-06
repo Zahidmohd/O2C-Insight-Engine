@@ -1,15 +1,18 @@
-# Dataset Analysis — SAP Order-to-Cash (O2C)
+# Demo Dataset Analysis — SAP Order-to-Cash (O2C)
 
 > **Date:** 2026-03-23
 > **Status:** ✅ Complete — All tables analyzed, joins validated with real data
 
+> **Note:** This document analyzes the **demo SAP O2C dataset** that ships with the project for testing and demonstration purposes. The O2C Insight Engine is dataset-agnostic — it can work with any relational dataset uploaded by users. This particular dataset was used during development to validate the query pipeline, graph extraction, join handling, and LLM prompt engineering. When users upload their own data, the system auto-infers schema, relationships, and knowledge base entries.
+
 ---
 
-## 1. Dataset Overview
+## 1. Demo Dataset Overview
 
 **Format:** JSONL (one JSON object per line, partitioned across multiple files)
 **Total Tables:** 19 (10 transactional + 9 master data)
 **Core Flow:** Sales Order → Delivery → Billing → Journal Entry → Payment
+**Purpose:** Test and demonstrate the full query pipeline with realistic enterprise data
 
 ---
 
