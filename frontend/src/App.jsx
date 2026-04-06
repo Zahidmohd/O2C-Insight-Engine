@@ -1380,13 +1380,14 @@ function App() {
                   <div className="metrics-card metrics-card-full">
                     <div className="metrics-card-title">Uptime</div>
                     <div className="metrics-big-value">
-                      {metricsData.uptime ? (() => {
-                        const s = metricsData.uptime;
-                        const d = Math.floor(s / 86400);
-                        const h = Math.floor((s % 86400) / 3600);
-                        const m = Math.floor((s % 3600) / 60);
-                        return `${d > 0 ? d + 'd ' : ''}${h}h ${m}m`;
-                      })() : 'N/A'}
+                      {metricsData.uptime
+                        ? (metricsData.uptime.human || (() => {
+                            const ms = metricsData.uptime.ms || 0;
+                            const h = Math.floor(ms / 3600000);
+                            const m = Math.floor((ms % 3600000) / 60000);
+                            return `${h}h ${m}m`;
+                          })())
+                        : 'N/A'}
                     </div>
                   </div>
 
@@ -1396,15 +1397,15 @@ function App() {
                       <div className="metrics-card-title">Queries</div>
                       <div className="metrics-grid-3">
                         <div>
-                          <div className="metrics-big-value">{metricsData.queries.total || 0}</div>
+                          <div className="metrics-big-value">{metricsData.queries.total ?? 0}</div>
                           <div className="metrics-stat-label">Total</div>
                         </div>
                         <div>
-                          <div className="metrics-big-value color-success">{metricsData.queries.successful || 0}</div>
+                          <div className="metrics-big-value color-success">{(metricsData.queries.total ?? 0) - (metricsData.queries.errors ?? 0)}</div>
                           <div className="metrics-stat-label">Successful</div>
                         </div>
                         <div>
-                          <div className={`metrics-big-value${metricsData.queries.failed > 0 ? ' color-danger' : ''}`}>{metricsData.queries.failed || 0}</div>
+                          <div className={`metrics-big-value${metricsData.queries.errors > 0 ? ' color-danger' : ''}`}>{metricsData.queries.errors ?? 0}</div>
                           <div className="metrics-stat-label">Failed ({metricsData.queries.errorRate || '0%'})</div>
                         </div>
                       </div>
@@ -1444,19 +1445,19 @@ function App() {
                       <div className="metrics-card-title">Latency</div>
                       <div className="metrics-grid-4">
                         <div>
-                          <div className="metrics-big-value">{metricsData.latency.avg || 'N/A'}</div>
+                          <div className="metrics-big-value">{metricsData.queries.total > 0 ? `${metricsData.latency.avg}ms` : '--'}</div>
                           <div className="metrics-stat-label">Avg</div>
                         </div>
                         <div>
-                          <div className="metrics-big-value color-success">{metricsData.latency.p50 || 'N/A'}</div>
+                          <div className="metrics-big-value color-success">{metricsData.queries.total > 0 ? `${metricsData.latency.p50}ms` : '--'}</div>
                           <div className="metrics-stat-label">P50</div>
                         </div>
                         <div>
-                          <div className="metrics-big-value color-warning">{metricsData.latency.p95 || 'N/A'}</div>
+                          <div className="metrics-big-value color-warning">{metricsData.queries.total > 0 ? `${metricsData.latency.p95}ms` : '--'}</div>
                           <div className="metrics-stat-label">P95</div>
                         </div>
                         <div>
-                          <div className="metrics-big-value color-danger">{metricsData.latency.p99 || 'N/A'}</div>
+                          <div className="metrics-big-value color-danger">{metricsData.queries.total > 0 ? `${metricsData.latency.p99}ms` : '--'}</div>
                           <div className="metrics-stat-label">P99</div>
                         </div>
                       </div>
