@@ -16,6 +16,7 @@ import { MetricsModule } from './metrics/metrics.module';
   imports: [
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'frontend', 'dist'),
+      exclude: ['/api/{*path}'],
     }),
     DatabaseModule,
     AppConfigModule,
