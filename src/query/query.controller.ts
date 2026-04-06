@@ -19,13 +19,17 @@ import * as os from 'os';
 import { Public } from '../auth/public.decorator';
 import { RateLimitGuard } from './rate-limit.guard';
 import { QueryService } from './query.service';
+import { MetricsService } from '../metrics/metrics.service';
 
 const UPLOAD_TEMP_DIR = path.join(os.tmpdir(), 'o2c-onboarding-uploads');
 const ALLOWED_EXTENSIONS = ['.jsonl', '.csv', '.json', '.zip'];
 
 @Controller()
 export class QueryController {
-  constructor(private readonly queryService: QueryService) {}
+  constructor(
+    private readonly queryService: QueryService,
+    private readonly metricsService: MetricsService,
+  ) {}
 
   // ─── Health Check ─────────────────────────────────────────────────────────
   @Public()
@@ -184,6 +188,16 @@ export class QueryController {
         llmTimeMs: Math.max(0, totalTimeMs - sqlTimeMs),
       };
 
+      // Record metrics for observability
+      this.metricsService.recordQuery({
+        latencyMs: totalTimeMs,
+        cacheHit: result.cacheSource != null,
+        provider: result.providerUsed || undefined,
+        queryType: result.queryType || 'SQL',
+        tenantId: (req as any).tenantId || null,
+        error: !result.success,
+      });
+
       // Optional debug info (only in DEBUG_MODE)
       const debug =
         process.env.DEBUG_MODE === 'true'
@@ -230,6 +244,13 @@ export class QueryController {
       });
     } catch (e: any) {
       console.error(`[API-${requestId}] Route Error:`, e.message);
+      this.metricsService.recordQuery({
+        latencyMs: Date.now() - pipelineStart,
+        cacheHit: false,
+        queryType: 'ERROR',
+        tenantId: (req as any).tenantId || null,
+        error: true,
+      });
       return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
         success: false,
         requestId,
