@@ -3,7 +3,11 @@
     "allow": [
       "Bash(taskkill //PID 8008 //F)",
       "Bash(curl -s http://localhost:3000/api/health)",
-      "Bash(node test-api.js)"
+      "Bash(node test-api.js)",
+      "Bash(node -e \"require\\(''./src/rag/vectorStore''\\); console.log\\(''OK''\\);\")",
+      "Bash(npx vite:*)",
+      "Bash(rm src/server.js src/routes/queryRoutes.js src/routes/documentRoutes.js src/routes/tenantRoutes.js src/auth/authRoutes.js src/auth/authMiddleware.js src/middleware/tenantResolver.js)",
+      "Bash(rmdir src/routes)"
     ]
   }
 }
