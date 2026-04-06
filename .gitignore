@@ -26,9 +26,16 @@ npm-debug.log*
 # Build
 dist/
 build/
+tsconfig.tsbuildinfo
 
 # Uploaded datasets
 datasets/
 
 # Tenant registry (contains auth tokens)
 data/tenants.json
+interview-architecture-walkthrough.md
+interview-ai-code.md
+interview-questions.md
+interview-walkthrough.md
+interview-answers.md
+interview-followups.md

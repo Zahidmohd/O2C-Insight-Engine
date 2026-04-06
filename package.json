@@ -2,11 +2,13 @@
   "name": "o2c-insight-engine",
   "version": "1.1.0",
   "description": "Natural language query system for SAP Order-to-Cash data with LLM-driven SQL and graph visualization",
-  "main": "src/server.js",
+  "main": "dist/main.js",
   "scripts": {
-    "start": "node src/db/loader.js && node src/server.js",
-    "build": "cd frontend && npm install && npm run build",
-    "test": "node tests/smokeTest.js"
+    "start": "node dist/main.js",
+    "start:dev": "ts-node -r reflect-metadata src/main.ts",
+    "build": "nest build",
+    "build:frontend": "cd frontend && npm install && npm run build",
+    "test": "npx ts-node tests/smokeTest.ts"
   },
   "keywords": [
     "sap",
@@ -19,18 +21,42 @@
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "@libsql/client": "^0.17.2",
+    "@nestjs/common": "^11.1.18",
+    "@nestjs/core": "^11.1.18",
+    "@nestjs/jwt": "^11.0.2",
+    "@nestjs/passport": "^11.0.5",
+    "@nestjs/platform-express": "^11.1.18",
+    "@nestjs/serve-static": "^5.0.4",
     "adm-zip": "^0.5.16",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^11.10.0",
+    "bullmq": "^5.73.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
     "cors": "^2.8.6",
     "csv-parse": "^6.2.1",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "groq-sdk": "^1.1.1",
     "helmet": "^8.1.0",
+    "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "officeparser": "^6.0.7",
-    "pdf-parse": "^1.1.1"
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "pdf-parse": "^1.1.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.17",
+    "@nestjs/schematics": "^11.0.10",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^25.5.2",
+    "@types/passport-jwt": "^4.0.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
   }
 }

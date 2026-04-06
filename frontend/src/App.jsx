@@ -160,6 +160,16 @@ function App() {
   const [docUploadStatus, setDocUploadStatus] = useState(null);
   const docFileInputRef = useRef(null);
 
+  const [workspaceInfo, setWorkspaceInfo] = useState(null); // { mode, organization }
+  const [showTeamModal, setShowTeamModal] = useState(false);
+  const [showMetrics, setShowMetrics] = useState(false);
+  const [metricsData, setMetricsData] = useState(null);
+  const [teamAction, setTeamAction] = useState('view'); // 'view' | 'create' | 'join'
+  const [orgName, setOrgName] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamError, setTeamError] = useState(null);
+
   const cyRef = useRef(null);
   const cyContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -191,18 +201,33 @@ function App() {
       .catch(() => {});
   };
 
+  const fetchWorkspaceInfo = () => {
+    axios.get(`${API_BASE}/api/organizations/me`)
+      .then(r => setWorkspaceInfo(r.data))
+      .catch(() => setWorkspaceInfo({ mode: 'personal', organization: null }));
+  };
+
+  const fetchMetrics = () => {
+    axios.get(`${API_BASE}/api/metrics`)
+      .then(r => setMetricsData(r.data))
+      .catch(() => {});
+  };
+
   // Fetch active dataset metadata + provider health when authenticated
   useEffect(() => {
     if (!authToken) return;
     fetchDatasetInfo();
     fetchProviderHealth();
+    fetchWorkspaceInfo();
     // Retry dataset info a few times (tenant DB initializes in background ~30-60s)
     const retry1 = setTimeout(fetchDatasetInfo, 3000);
     const retry2 = setTimeout(fetchDatasetInfo, 10000);
     const retry3 = setTimeout(fetchDatasetInfo, 30000);
     // Refresh provider health every 30s
     const interval = setInterval(fetchProviderHealth, 30000);
-    return () => { clearInterval(interval); clearTimeout(retry1); clearTimeout(retry2); clearTimeout(retry3); };
+    // Refresh metrics every 60s
+    const metricsInterval = setInterval(fetchMetrics, 60000);
+    return () => { clearInterval(interval); clearInterval(metricsInterval); clearTimeout(retry1); clearTimeout(retry2); clearTimeout(retry3); };
   }, [authToken]);
 
   // Refresh provider health after each query
@@ -783,6 +808,72 @@ function App() {
     setDatasetInfo(null);
   };
 
+  const handleCreateOrg = async () => {
+    if (!orgName.trim()) return;
+    setTeamLoading(true);
+    setTeamError(null);
+    try {
+      const res = await axios.post(`${API_BASE}/api/organizations`, { name: orgName });
+      if (res.data.success) {
+        setTeamAction('view');
+        fetchWorkspaceInfo();
+        setOrgName('');
+      }
+    } catch (err) {
+      setTeamError(err.response?.data?.error?.message || 'Failed to create organization.');
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
+  const handleJoinOrg = async () => {
+    if (!inviteCode.trim()) return;
+    setTeamLoading(true);
+    setTeamError(null);
+    try {
+      const res = await axios.post(`${API_BASE}/api/organizations/join`, { inviteCode });
+      if (res.data.success) {
+        setTeamAction('view');
+        fetchWorkspaceInfo();
+        fetchDatasetInfo();
+        setInviteCode('');
+      }
+    } catch (err) {
+      setTeamError(err.response?.data?.error?.message || 'Failed to join organization.');
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
+  const handleLeaveOrg = async () => {
+    if (!confirm('Leave this organization? You will switch to your personal workspace.')) return;
+    setTeamLoading(true);
+    try {
+      await axios.post(`${API_BASE}/api/organizations/leave`);
+      fetchWorkspaceInfo();
+      fetchDatasetInfo();
+    } catch (err) {
+      setTeamError(err.response?.data?.error?.message || 'Failed to leave organization.');
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
+  const handleSwitchWorkspace = async (mode) => {
+    setTeamLoading(true);
+    try {
+      await axios.post(`${API_BASE}/api/organizations/switch`, { mode });
+      fetchWorkspaceInfo();
+      fetchDatasetInfo();
+      setChatHistory([]);
+      setResultInfo(null);
+    } catch (err) {
+      setTeamError(err.response?.data?.error?.message || 'Failed to switch workspace.');
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
   // Auth gate — show login/register if not authenticated
   if (!authToken) {
     return (
@@ -815,6 +906,22 @@ function App() {
             </span>
           </div>
         )}
+
+        {/* Workspace indicator */}
+        {workspaceInfo && (
+          <div className={`nav-workspace-badge ${workspaceInfo.mode === 'team' ? 'workspace-team' : 'workspace-personal'}`} onClick={() => { setTeamAction('view'); setTeamError(null); setShowTeamModal(true); }}>
+            <span className="workspace-dot" />
+            <span>{workspaceInfo.mode === 'team' ? workspaceInfo.organization?.name || 'Team' : 'Personal'}</span>
+            {workspaceInfo.organization && workspaceInfo.mode === 'personal' && (
+              <span className="workspace-hint">team available</span>
+            )}
+          </div>
+        )}
+
+        {/* Metrics button */}
+        <button className="nav-metrics-btn" onClick={() => { fetchMetrics(); setShowMetrics(true); }} title="System Metrics">
+          Metrics
+        </button>
 
         {datasetError && (
           <button className="nav-dataset-badge" style={{ cursor: 'pointer', color: '#b91c1c' }} onClick={fetchDatasetInfo}>
@@ -1095,6 +1202,297 @@ function App() {
                 <div className="upload-status upload-loading">
                   <div className="dot-pulse"><span></span><span></span><span></span></div>
                   {onboardingStep === 0 ? 'Analyzing files...' : 'Initializing dataset...'}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Team / Organization Modal */}
+      {showTeamModal && (
+        <div className="modal-overlay" onClick={() => setShowTeamModal(false)}>
+          <div className="modal-content modal-narrow" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Team & Workspace</h3>
+              <button className="modal-close" onClick={() => setShowTeamModal(false)}>&times;</button>
+            </div>
+            <div className="modal-body">
+              {teamError && (
+                <div className="error-banner">{teamError}</div>
+              )}
+
+              {/* View mode */}
+              {teamAction === 'view' && (
+                <>
+                  {/* Workspace switcher */}
+                  {workspaceInfo?.organization && (
+                    <div className="mb-16">
+                      <div className="team-section-label">Active Workspace</div>
+                      <div className="team-workspace-toggle">
+                        <button
+                          className={workspaceInfo.mode === 'personal' ? 'active' : ''}
+                          onClick={() => handleSwitchWorkspace('personal')}
+                          disabled={teamLoading}
+                        >
+                          Personal
+                        </button>
+                        <button
+                          className={workspaceInfo.mode === 'team' ? 'active' : ''}
+                          onClick={() => handleSwitchWorkspace('team')}
+                          disabled={teamLoading}
+                        >
+                          Team
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Organization details */}
+                  {workspaceInfo?.organization ? (
+                    <div className="team-org-card">
+                      <div className="team-org-header">
+                        <div>
+                          <div className="team-org-name">{workspaceInfo.organization.name}</div>
+                          <div className="team-org-count">{workspaceInfo.organization.memberCount} member{workspaceInfo.organization.memberCount !== 1 ? 's' : ''}</div>
+                        </div>
+                        <button
+                          className="btn-danger"
+                          onClick={handleLeaveOrg}
+                          disabled={teamLoading}
+                        >
+                          Leave
+                        </button>
+                      </div>
+
+                      {/* Invite code */}
+                      <div className="team-invite-code">
+                        <div>
+                          <div className="team-section-label">Invite Code</div>
+                          <code>{workspaceInfo.organization.inviteCode}</code>
+                        </div>
+                        <button onClick={() => { navigator.clipboard.writeText(workspaceInfo.organization.inviteCode); }}>
+                          Copy
+                        </button>
+                      </div>
+
+                      {/* Members list */}
+                      {workspaceInfo.organization.members && workspaceInfo.organization.members.length > 0 && (
+                        <div>
+                          <div className="team-section-label">Members</div>
+                          <ul className="team-member-list">
+                            {workspaceInfo.organization.members.map((m, i) => (
+                              <li key={i}>
+                                <span>{m.email || m.userId}</span>
+                                <span className={`team-member-role${m.role === 'admin' ? ' admin' : ''}`}>{m.role || 'member'}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center team-empty-state">
+                      <div className="team-empty-message">You are not part of any organization yet.</div>
+                      <div className="team-empty-actions">
+                        <button
+                          className="btn-primary"
+                          onClick={() => { setTeamAction('create'); setTeamError(null); }}
+                        >
+                          Create Organization
+                        </button>
+                        <button
+                          className="btn-secondary"
+                          onClick={() => { setTeamAction('join'); setTeamError(null); }}
+                        >
+                          Join with Invite Code
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Create mode */}
+              {teamAction === 'create' && (
+                <div>
+                  <button className="btn-link" onClick={() => setTeamAction('view')}>&larr; Back</button>
+                  <div className="team-form-title">Create Organization</div>
+                  <input
+                    className="input-field mb-16"
+                    type="text"
+                    placeholder="Organization name"
+                    value={orgName}
+                    onChange={(e) => setOrgName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleCreateOrg(); }}
+                  />
+                  <button
+                    className="btn-primary btn-full"
+                    onClick={handleCreateOrg}
+                    disabled={teamLoading || !orgName.trim()}
+                  >
+                    {teamLoading ? 'Creating...' : 'Create Organization'}
+                  </button>
+                </div>
+              )}
+
+              {/* Join mode */}
+              {teamAction === 'join' && (
+                <div>
+                  <button className="btn-link" onClick={() => setTeamAction('view')}>&larr; Back</button>
+                  <div className="team-form-title">Join Organization</div>
+                  <input
+                    className="input-field input-mono mb-16"
+                    type="text"
+                    placeholder="Paste invite code"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleJoinOrg(); }}
+                  />
+                  <button
+                    className="btn-primary btn-full"
+                    onClick={handleJoinOrg}
+                    disabled={teamLoading || !inviteCode.trim()}
+                  >
+                    {teamLoading ? 'Joining...' : 'Join Organization'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Metrics Modal */}
+      {showMetrics && (
+        <div className="modal-overlay" onClick={() => setShowMetrics(false)}>
+          <div className="modal-content modal-wide" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>System Metrics</h3>
+              <button className="modal-close" onClick={() => setShowMetrics(false)}>&times;</button>
+            </div>
+            <div className="modal-body">
+              {!metricsData ? (
+                <div className="text-center metrics-loading">Loading metrics...</div>
+              ) : (
+                <div className="metrics-layout">
+                  {/* Uptime */}
+                  <div className="metrics-card metrics-card-full">
+                    <div className="metrics-card-title">Uptime</div>
+                    <div className="metrics-big-value">
+                      {metricsData.uptime ? (() => {
+                        const s = metricsData.uptime;
+                        const d = Math.floor(s / 86400);
+                        const h = Math.floor((s % 86400) / 3600);
+                        const m = Math.floor((s % 3600) / 60);
+                        return `${d > 0 ? d + 'd ' : ''}${h}h ${m}m`;
+                      })() : 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* Queries */}
+                  {metricsData.queries && (
+                    <div className="metrics-card metrics-card-full">
+                      <div className="metrics-card-title">Queries</div>
+                      <div className="metrics-grid-3">
+                        <div>
+                          <div className="metrics-big-value">{metricsData.queries.total || 0}</div>
+                          <div className="metrics-stat-label">Total</div>
+                        </div>
+                        <div>
+                          <div className="metrics-big-value color-success">{metricsData.queries.successful || 0}</div>
+                          <div className="metrics-stat-label">Successful</div>
+                        </div>
+                        <div>
+                          <div className={`metrics-big-value${metricsData.queries.failed > 0 ? ' color-danger' : ''}`}>{metricsData.queries.failed || 0}</div>
+                          <div className="metrics-stat-label">Failed ({metricsData.queries.errorRate || '0%'})</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cache */}
+                  {metricsData.cache && (
+                    <div className="metrics-card metrics-card-full">
+                      <div className="metrics-card-title">Cache</div>
+                      <div className="metrics-grid-3">
+                        <div>
+                          <div className="metrics-big-value color-success">{metricsData.cache.hits || 0}</div>
+                          <div className="metrics-stat-label">Hits</div>
+                        </div>
+                        <div>
+                          <div className="metrics-big-value color-warning">{metricsData.cache.misses || 0}</div>
+                          <div className="metrics-stat-label">Misses</div>
+                        </div>
+                        <div>
+                          <div className="metrics-big-value color-primary">{metricsData.cache.hitRate || '0%'}</div>
+                          <div className="metrics-stat-label">Hit Rate</div>
+                        </div>
+                      </div>
+                      {metricsData.redis && (
+                        <div className="metrics-redis-status">
+                          Redis: <span className={metricsData.redis.connected ? 'color-success' : 'color-danger'}>{metricsData.redis.connected ? 'Connected' : 'Disconnected'}</span>
+                          {metricsData.redis.memoryUsed && <span> &middot; {metricsData.redis.memoryUsed}</span>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Latency */}
+                  {metricsData.latency && (
+                    <div className="metrics-card metrics-card-full">
+                      <div className="metrics-card-title">Latency</div>
+                      <div className="metrics-grid-4">
+                        <div>
+                          <div className="metrics-big-value">{metricsData.latency.avg || 'N/A'}</div>
+                          <div className="metrics-stat-label">Avg</div>
+                        </div>
+                        <div>
+                          <div className="metrics-big-value color-success">{metricsData.latency.p50 || 'N/A'}</div>
+                          <div className="metrics-stat-label">P50</div>
+                        </div>
+                        <div>
+                          <div className="metrics-big-value color-warning">{metricsData.latency.p95 || 'N/A'}</div>
+                          <div className="metrics-stat-label">P95</div>
+                        </div>
+                        <div>
+                          <div className="metrics-big-value color-danger">{metricsData.latency.p99 || 'N/A'}</div>
+                          <div className="metrics-stat-label">P99</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Provider Usage */}
+                  {metricsData.providers && Object.keys(metricsData.providers).length > 0 && (
+                    <div className="metrics-card">
+                      <div className="metrics-card-title">Provider Usage</div>
+                      {Object.entries(metricsData.providers).map(([name, count]) => (
+                        <div key={name} className="metrics-stat">
+                          <span className="metrics-stat-label">{name}</span>
+                          <span className="metrics-stat-value">{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Query Types */}
+                  {metricsData.queryTypes && Object.keys(metricsData.queryTypes).length > 0 && (
+                    <div className="metrics-card">
+                      <div className="metrics-card-title">Query Type Distribution</div>
+                      {Object.entries(metricsData.queryTypes).map(([type, count]) => (
+                        <div key={type} className="metrics-stat">
+                          <span className="metrics-stat-label metrics-type-label">{type}</span>
+                          <span className="metrics-stat-value">{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Refresh button */}
+                  <button className="btn-secondary btn-full" onClick={fetchMetrics}>
+                    Refresh Metrics
+                  </button>
                 </div>
               )}
             </div>

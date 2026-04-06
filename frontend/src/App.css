@@ -87,6 +87,241 @@ body, html {
   white-space: nowrap;
 }
 
+/* Workspace badge */
+.nav-workspace-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b6b80;
+  padding: 3px 10px;
+  border: 1px solid #e0e0ea;
+  border-radius: 12px;
+  background: #f9f9fc;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.nav-workspace-badge:hover {
+  border-color: #4a6cf7;
+  color: #4a6cf7;
+}
+
+.nav-workspace-badge.workspace-team {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4a6cf7;
+}
+
+.nav-workspace-badge.workspace-personal {
+  background: #f0f0f8;
+  border-color: #e0e0ea;
+  color: #6b6b80;
+}
+
+.workspace-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.workspace-team .workspace-dot {
+  background: #4a6cf7;
+}
+
+.workspace-personal .workspace-dot {
+  background: #22c55e;
+}
+
+.workspace-hint {
+  font-size: 10px;
+  color: #8b8ba0;
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+/* Metrics button */
+.nav-metrics-btn {
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b6b80;
+  background: transparent;
+  border: 1px solid #e0e0ea;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.nav-metrics-btn:hover {
+  color: #4a6cf7;
+  border-color: #4a6cf7;
+  background: #f5f7ff;
+}
+
+/* Team modal specifics */
+.team-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8b8ba0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.team-workspace-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.team-workspace-toggle button {
+  flex: 1;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #e0e0ea;
+  background: #f9f9fc;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b6b80;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.team-workspace-toggle button.active {
+  background: #4a6cf7;
+  color: #ffffff;
+  border-color: #4a6cf7;
+}
+
+.team-workspace-toggle button:hover:not(.active) {
+  border-color: #4a6cf7;
+  color: #4a6cf7;
+}
+
+.team-invite-code {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f0f0f8;
+  border: 1px solid #e0e0ea;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.team-invite-code code {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #1a1a2e;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.team-invite-code button {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #4a6cf7;
+  background: #ffffff;
+  border: 1px solid #4a6cf7;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.team-invite-code button:hover {
+  background: #4a6cf7;
+  color: #ffffff;
+}
+
+.team-member-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px 0;
+}
+
+.team-member-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f8;
+  font-size: 13px;
+  color: #1a1a2e;
+}
+
+.team-member-role {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #f0f0f8;
+  color: #8b8ba0;
+}
+
+.team-member-role.admin {
+  background: #eef2ff;
+  color: #4a6cf7;
+}
+
+/* Metrics modal specifics */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.metrics-card {
+  background: #f9f9fc;
+  border: 1px solid #e8e8ef;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.metrics-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8b8ba0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+.metrics-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.metrics-stat-label {
+  color: #6b6b80;
+}
+
+.metrics-stat-value {
+  font-weight: 600;
+  color: #1a1a2e;
+}
+
+.metrics-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+
 .nav-upload-btn {
   margin-left: 8px;
   padding: 5px 16px;
@@ -1763,4 +1998,257 @@ body, html {
   background: #f7f8fa;
   border-radius: 8px;
   border: 1px dashed #d0d0e0;
+}
+
+/* ===================== UTILITY CLASSES ===================== */
+
+.btn-primary {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background: #4a6cf7;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover {
+  background: #3a5ce5;
+}
+
+.btn-primary:disabled {
+  background: #a0b0f0;
+  cursor: wait;
+}
+
+.btn-secondary {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b6b80;
+  background: transparent;
+  border: 1px solid #e8e8ef;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.btn-secondary:hover {
+  color: #4a6cf7;
+  border-color: #4a6cf7;
+  background: #f5f7ff;
+}
+
+.btn-danger {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.btn-danger:hover {
+  background: #fee2e2;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #8b8ba0;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  font-family: inherit;
+  margin-bottom: 12px;
+  display: inline-block;
+}
+
+.btn-link:hover {
+  color: #4a6cf7;
+}
+
+.btn-full {
+  width: 100%;
+}
+
+.error-banner {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.input-field {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #e0e0ea;
+  font-size: 14px;
+  font-family: inherit;
+  color: #1a1a2e;
+  box-sizing: border-box;
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: #4a6cf7;
+  box-shadow: 0 0 0 3px rgba(74, 108, 247, 0.1);
+}
+
+.input-mono {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.mt-12 {
+  margin-top: 12px;
+}
+
+.mb-16 {
+  margin-bottom: 16px;
+}
+
+/* ===================== MODAL SIZE VARIANTS ===================== */
+
+.modal-narrow {
+  max-width: 480px;
+}
+
+.modal-wide {
+  max-width: 540px;
+}
+
+/* ===================== TEAM MODAL EXTENSIONS ===================== */
+
+.team-org-card {
+  border: 1px solid #e0e0ea;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.team-org-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.team-org-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.team-org-count {
+  font-size: 12px;
+  color: #8b8ba0;
+  margin-top: 2px;
+}
+
+.team-empty-state {
+  padding: 20px 0;
+}
+
+.team-empty-message {
+  font-size: 14px;
+  color: #6b6b80;
+  margin-bottom: 16px;
+}
+
+.team-empty-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.team-form-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin-bottom: 12px;
+}
+
+/* ===================== METRICS MODAL EXTENSIONS ===================== */
+
+.metrics-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.metrics-card-full {
+  grid-column: 1 / -1;
+}
+
+.metrics-loading {
+  padding: 20px;
+  color: #8b8ba0;
+}
+
+.metrics-big-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.metrics-grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+.metrics-grid-4 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+.metrics-grid-4 .metrics-big-value {
+  font-size: 18px;
+}
+
+.metrics-redis-status {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #8b8ba0;
+}
+
+.metrics-redis-status span {
+  font-weight: 600;
+}
+
+.metrics-type-label {
+  text-transform: uppercase;
+}
+
+/* Color utility classes */
+.color-success {
+  color: #22c55e;
+}
+
+.color-warning {
+  color: #f59e0b;
+}
+
+.color-danger {
+  color: #ef4444;
+}
+
+.color-primary {
+  color: #4a6cf7;
 }
