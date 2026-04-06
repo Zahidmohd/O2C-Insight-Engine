@@ -62,8 +62,8 @@ User Query
 | 1 | NVIDIA NIM | `meta/llama-3.1-70b-instruct` | 40 RPM | Primary — fastest |
 | 2 | Cerebras | `llama-3.3-70b` | 30 RPM | Secondary — fast inference |
 | 3 | Groq | `llama-3.3-70b-versatile` | 30 RPM | Tertiary — reliable |
-| 4 | OpenRouter | `meta-llama/llama-3.3-70b-instruct` | 200 RPD | Fallback — generous daily limit |
-| 5 | SambaNova | `Meta-Llama-3.1-405B-Instruct` | 20 RPD | Last resort — largest model |
+| 4 | OpenAI GPT-4 | `gpt-4-turbo` | Pay-per-use | Premium — highest accuracy |
+| 5 | Gemini Pro | `gemini-1.5-pro` | Pay-per-use | Premium — Google's best |
 
 ### 2.2 Health Tracking
 

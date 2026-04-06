@@ -117,8 +117,8 @@
 │  │              │  │              │  │ NVIDIA  ──┐         │ │
 │  │ users table  │  │ data tables  │  │ Cerebras ─┤ Health  │ │
 │  │ orgs table   │  │ documents    │  │ Groq   ───┤ Scored  │ │
-│  │              │  │ doc_chunks   │  │ OpenRouter┤ Ordered │ │
-│  │              │  │ (F32_BLOB)   │  │ SambaNova─┘         │ │
+│  │              │  │ doc_chunks   │  │ OpenAI GPT-4┤ Ordered │ │
+│  │              │  │ (F32_BLOB)   │  │ Gemini Pro─┘         │ │
 │  └──────────────┘  └──────────────┘  └────────────────────┘ │
 │                                                               │
 │  ┌──────────────┐                                            │
@@ -232,8 +232,8 @@ Render (Auto-deploy)
 │  GROQ_API_KEY           │
 │  NVIDIA_API_KEY         │
 │  CEREBRAS_API_KEY       │
-│  OPENROUTER_API_KEY     │
-│  SAMBANOVA_API_KEY      │
+│  OPENAI_API_KEY     │
+│  GEMINI_API_KEY      │
 │  TURSO_API_TOKEN        │
 │  TURSO_ORG_SLUG         │
 │  JWT_SECRET             │

@@ -39,8 +39,8 @@
 │  │  │ Redis     │  │ BullMQ Workers │  │ LLM Providers (5x)   │   │  │
 │  │  │ Cache     │  │                │  │                       │   │  │
 │  │  │ (5m TTL)  │  │ dataset-proc   │  │ NVIDIA, Cerebras,    │   │  │
-│  │  │ fallback: │  │ embedding-gen  │  │ Groq, OpenRouter,    │   │  │
-│  │  │ in-memory │  │ tenant-prov    │  │ SambaNova             │   │  │
+│  │  │ fallback: │  │ embedding-gen  │  │ Groq, OpenAI GPT-4,    │   │  │
+│  │  │ in-memory │  │ tenant-prov    │  │ Gemini Pro             │   │  │
 │  │  └───────────┘  └────────────────┘  └───────────────────────┘   │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
@@ -178,10 +178,10 @@ Provider Health Sort (highest score first)
   ├─ Groq (llama-3.3-70b-versatile)
   │    └─ Score: 100 base + success/failure adjustments
   │
-  ├─ OpenRouter (llama-3.1-70b-instruct)
+  ├─ OpenAI GPT-4 (gpt-4-turbo)
   │    └─ Score: 100 base + success/failure adjustments
   │
-  └─ SambaNova (llama-3.1-8b / Qwen3-32B / llama-3.3-70b)
+  └─ Gemini Pro (gemini-1.5-pro)
        └─ Score: 100 base + success/failure adjustments
 
 Model Selection (per query):

@@ -31,7 +31,7 @@
 | **Cache** | Redis (ioredis) |
 | **Queue** | BullMQ |
 | **Auth** | JWT + Passport + bcrypt |
-| **LLM Providers** | Groq, NVIDIA NIM, Cerebras, OpenRouter, SambaNova |
+| **LLM Providers** | Groq, NVIDIA NIM, Cerebras, OpenAI GPT-4, Gemini Pro |
 | **Embeddings** | HuggingFace Transformers.js (local, Xenova/all-MiniLM-L6-v2) |
 | **Deployment** | Render (free tier) |
 
@@ -103,10 +103,10 @@ cd frontend && npm run dev
 | Variable | Required | Description |
 |---|---|---|
 | `GROQ_API_KEY` | At least one LLM key | Groq API key |
-| `OPENROUTER_API_KEY` | At least one LLM key | OpenRouter API key |
+| `OPENAI_API_KEY` | At least one LLM key | OpenAI API key |
 | `NVIDIA_API_KEY` | Optional | NVIDIA NIM API key (40 RPM limit) |
 | `CEREBRAS_API_KEY` | Optional | Cerebras API key |
-| `SAMBANOVA_API_KEY` | Optional | SambaNova API key |
+| `GEMINI_API_KEY` | Optional | Google Gemini API key |
 | `PORT` | No | Server port (default: `3000`) |
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins |
 | `JWT_SECRET` | Recommended | Secret for JWT signing (auto-generated if missing) |
