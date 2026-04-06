@@ -7,7 +7,7 @@
 │  User   │────────▶│  O2C Insight      │────────▶│  LLM APIs    │
 │ (Browser)│◀────────│  Engine           │◀────────│  (5 providers)│
 └─────────┘  HTTPS  │  (NestJS/TS)      │  HTTPS  └──────────────┘
-                     │  (Render)         │
+                     │  (Azure)          │
                      │                   │────────▶┌──────────────┐
                      │                   │◀────────│  Turso Cloud │
                      │                   │  HTTPS  │  (SQLite DBs)│
@@ -48,7 +48,7 @@
 
 | # | Requirement | Target | Actual |
 |---|------------|--------|--------|
-| NF1 | Cost | $0/month | Achieved (all free tier) |
+| NF1 | Cost | Minimal (~$22/month for 50 users) | Achieved (cost-optimized infrastructure) |
 | NF2 | Query latency | <10s | 2-8s (LLM dependent) |
 | NF3 | SQL execution time | <100ms | 0.2-80ms (SQLite) / 50-200ms (Turso) |
 | NF4 | Availability | 99%+ | 5 LLM providers + multi-layer fallback |
@@ -122,7 +122,7 @@
 │  └──────────────┘  └──────────────┘  └────────────────────┘ │
 │                                                               │
 │  ┌──────────────┐                                            │
-│  │ Global SQLite│  (dev/tests fallback — ephemeral on Render)│
+│  │ Global SQLite│  (dev/tests fallback — ephemeral on Azure) │
 │  │ sap_otc.db   │  (demo SAP O2C data)                      │
 │  └──────────────┘                                            │
 └──────────────────────────────────────────────────────────────┘
@@ -182,15 +182,15 @@ Long-running operations are offloaded to BullMQ workers backed by Redis:
 
 ## 6. Scalability Path
 
-| Current (Free Tier) | Next Step | Full Scale |
+| Current (Low-Cost Tier) | Next Step | Full Scale |
 |---------------------|-----------|------------|
-| 500 Turso DBs | Turso paid ($9/month, unlimited) | PostgreSQL + pgvector |
-| 5 free LLM providers | Paid API keys (higher limits) | Self-hosted LLM |
+| 500 Turso DBs | Turso growth plan (unlimited) | PostgreSQL + pgvector |
+| 3 affordable + 2 premium LLM providers | Higher-tier API plans | Self-hosted LLM |
 | UUID auth + Team Mode | Add OAuth (GitHub, Google) | Full IAM |
-| Render free tier | Render paid ($7/month) | Kubernetes |
+| Azure App Service | Azure App Service scaled plan | Kubernetes |
 | In-process embedding | Dedicated embedding service | GPU-accelerated |
 | JSON tenants.json | Turso registry table | Distributed registry |
-| Redis free tier | Redis paid (larger cache) | Redis Cluster |
+| Redis starter plan | Redis dedicated instance | Redis Cluster |
 | BullMQ (3 workers) | Horizontal worker scaling | Dedicated job servers |
 
 ---
@@ -220,7 +220,7 @@ GitHub Repository
        │
        │ git push
        ▼
-Render (Auto-deploy)
+Azure App Service (Auto-deploy)
 ┌─────────────────────────┐
 │ Build: npm install &&   │
 │        npm run build    │

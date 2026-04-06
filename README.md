@@ -33,7 +33,7 @@
 | **Auth** | JWT + Passport + bcrypt |
 | **LLM Providers** | Groq, NVIDIA NIM, Cerebras, OpenAI GPT-4, Gemini Pro |
 | **Embeddings** | HuggingFace Transformers.js (local, Xenova/all-MiniLM-L6-v2) |
-| **Deployment** | Render (free tier) |
+| **Deployment** | Azure App Service |
 
 ---
 
@@ -263,7 +263,7 @@ Additional:
 
 ## Deployment
 
-Hosted on Render (free tier).
+Hosted on Azure App Service.
 
 | Setting | Value |
 |---|---|
@@ -271,7 +271,7 @@ Hosted on Render (free tier).
 | **Start command** | `npm start` |
 | **Node version** | 18+ |
 
-Set environment variables in the Render dashboard. Redis is optional but recommended (Render offers managed Redis, or use any external Redis URL via `REDIS_URL`).
+Set environment variables in the Azure App Service configuration. Redis is optional but recommended (Azure offers managed Redis, or use any external Redis URL via `REDIS_URL`).
 
 ---
 

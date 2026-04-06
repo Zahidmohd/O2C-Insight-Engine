@@ -5,7 +5,7 @@
 Build a system where users ask natural language questions about business data and receive SQL-backed answers with interactive graph visualizations. The system must:
 - Support any dataset (not just SAP O2C)
 - Isolate each user's data completely
-- Run on zero-cost infrastructure
+- Run on cost-optimized infrastructure
 - Work reliably even when LLM providers fail
 
 ---
@@ -20,13 +20,13 @@ Build a system where users ask natural language questions about business data an
 | Cost | Free (file-based) | Free tier limited |
 | Per-tenant isolation | One DB per tenant (Turso) | Schema-per-tenant or tenant_id column |
 | Vector search | Turso native (F32_BLOB + DiskANN) | Requires pgvector extension |
-| Deployment | Works on Render free tier | Needs separate DB service |
+| Deployment | Works on Azure App Service | Needs separate DB service |
 
-**Decision:** SQLite via Turso — each tenant gets a cloud SQLite database with native vector search. Zero cost, zero ops.
+**Decision:** SQLite via Turso — each tenant gets a cloud SQLite database with native vector search. Minimal cost, zero ops.
 
 ### 2. Why 5 LLM Providers?
 
-Free-tier API keys have aggressive rate limits (20-40 RPM). A single provider would fail under sustained use. With 5 providers and health-based ordering:
+Even on paid low-tier plans, LLM providers have rate limits (30-40 RPM). A single provider would fail under sustained use. With 5 providers and health-based ordering:
 - If Provider 1 is rate-limited → Provider 2 catches it in <1s
 - All 5 fail → keyword-to-table fallback SQL (no LLM needed)
 - All fallbacks fail → return suggested queries
@@ -163,7 +163,7 @@ User Question
 
 ---
 
-## Capacity Planning (Free Tier)
+## Capacity Planning (Production Low-Tier)
 
 | Resource | Limit | Usage per User |
 |----------|-------|----------------|
@@ -171,9 +171,9 @@ User Question
 | Turso storage | 9 GB | ~2 MB per user (21K rows) |
 | Turso reads | 25M/month | ~100 reads per query |
 | LLM requests | ~150 RPM (combined) | 2 per query (SQL + NL answer) |
-| Render RAM | 512 MB | ~200 MB (Node + embedding model) |
-| Render disk | Ephemeral | Global SQLite only (tenant data in Turso) |
-| Redis memory | ~25 MB (free tier) | ~1 KB per cached query result |
+| Azure RAM | 512 MB | ~200 MB (Node + embedding model) |
+| Azure disk | Ephemeral | Global SQLite only (tenant data in Turso) |
+| Redis memory | ~25 MB (starter plan) | ~1 KB per cached query result |
 
 **Max concurrent users:** ~250 (limited by Turso DB count)
 **Max queries/minute:** ~75 (limited by LLM rate limits)

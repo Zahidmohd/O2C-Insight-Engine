@@ -145,14 +145,14 @@ Turso Cloud (aws-ap-south-1)
 │   ├── documents
 │   └── document_chunks
 │
-└── ... (up to 500 tenants on free tier)
+└── ... (up to 500 tenants on starter plan)
 
 Redis (Cache-Aside)
 ├── query:{hash} → cached query results (5-min TTL)
 ├── schema:{tenantId} → cached schema metadata
 └── Graceful fallback → in-memory cache if Redis unavailable
 
-Render (ephemeral)
+Azure (ephemeral)
 └── sap_otc.db (global SQLite — dev/tests fallback)
     ├── 19 demo SAP O2C tables (test dataset)
     ├── documents
@@ -226,7 +226,7 @@ Search (3-layer fallback):
 | **Database** | Turso (LibSQL) | Cloud SQLite with native vector search |
 | **Auth** | bcrypt + JWT | Stateless, zero infra |
 | **Embeddings** | HuggingFace Transformers.js | Local, free, 384-dim |
-| **LLM** | 5 free-tier providers | Redundancy, zero cost |
-| **Deployment** | Render | Free tier, auto-deploy from GitHub |
+| **LLM** | 3 affordable + 2 premium providers | Redundancy, cost-optimized routing |
+| **Deployment** | Azure App Service | Auto-deploy from GitHub |
 | **Vector Search** | Turso F32_BLOB + DiskANN | Native indexed search, no extensions |
 | **Metrics** | GET /api/metrics | Uptime, cache hit/miss, latency P50/P95/P99 |
