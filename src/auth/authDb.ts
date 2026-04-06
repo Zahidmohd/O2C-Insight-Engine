@@ -75,8 +75,8 @@ async function initAuthDb(): Promise<void> {
         }
     }
 
-    // Create users + organizations tables
-    const createSql: string = `
+    // Create organizations table
+    const createOrgSql: string = `
         CREATE TABLE IF NOT EXISTS organizations (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -85,13 +85,16 @@ async function initAuthDb(): Promise<void> {
             created_by TEXT NOT NULL,
             created_at TEXT DEFAULT (datetime('now'))
         );
+    `;
 
+    // Create users table (for fresh installs)
+    const createUsersSql: string = `
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            tenant_id TEXT UNIQUE NOT NULL,
-            personal_tenant_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            personal_tenant_id TEXT,
             organization_id TEXT,
             active_workspace TEXT DEFAULT 'personal',
             role TEXT DEFAULT 'member',
@@ -100,10 +103,31 @@ async function initAuthDb(): Promise<void> {
         );
     `;
 
+    // Migration: add new columns to existing users table (safe — ignores if already exists)
+    const migrations: string[] = [
+        "ALTER TABLE users ADD COLUMN personal_tenant_id TEXT;",
+        "ALTER TABLE users ADD COLUMN organization_id TEXT;",
+        "ALTER TABLE users ADD COLUMN active_workspace TEXT DEFAULT 'personal';",
+        "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'member';",
+    ];
+
+    // Backfill: set personal_tenant_id = tenant_id for existing users who don't have it
+    const backfillSql: string = "UPDATE users SET personal_tenant_id = tenant_id WHERE personal_tenant_id IS NULL;";
+
     if (authClient) {
-        await authClient.executeMultiple(createSql);
+        await authClient.executeMultiple(createOrgSql);
+        await authClient.executeMultiple(createUsersSql);
+        for (const m of migrations) {
+            try { await authClient.execute(m); } catch (_) { /* column already exists */ }
+        }
+        await authClient.execute(backfillSql);
     } else {
-        await (db as any).execAsync(createSql);
+        await (db as any).execAsync(createOrgSql);
+        await (db as any).execAsync(createUsersSql);
+        for (const m of migrations) {
+            try { await (db as any).execAsync(m); } catch (_) { /* column already exists */ }
+        }
+        await (db as any).execAsync(backfillSql);
     }
 
     console.log('[AUTH] Users + Organizations tables initialized.');
