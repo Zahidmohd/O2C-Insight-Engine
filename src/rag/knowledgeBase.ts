@@ -135,13 +135,76 @@ function buildDynamicKB(config: any): KBEntry[] {
     return entries;
 }
 
+// ─── Embed KB Entries as Vector Chunks ──────────────────────────────────────
+
+/**
+ * Embeds auto-generated KB entries and stores them as vector chunks.
+ * This makes schema knowledge searchable via vector similarity —
+ * so "Which table has customer payment info?" finds the payments table
+ * even if the user's words don't exactly match any keyword.
+ *
+ * Called after dataset upload, alongside document embedding.
+ * Uses a special document_id = -1 to distinguish KB chunks from user documents.
+ */
+async function embedKBEntries(config: any, dbConn: any): Promise<number> {
+    if (!config || !config.tables) return 0;
+
+    const dynamicEntries = buildDynamicKB(config);
+    const o2cEntries = (config.name === 'sap_o2c') ? O2C_KB : [];
+    const allEntries = [...dynamicEntries, ...o2cEntries];
+
+    if (allEntries.length === 0) return 0;
+
+    // Check if KB chunks already exist (avoid re-embedding on every query)
+    try {
+        const existing = await dbConn.getAsync(
+            "SELECT COUNT(*) as count FROM document_chunks WHERE document_id = -1"
+        );
+        if (existing && existing.count > 0) {
+            console.log(`[KB] ${existing.count} KB vector chunks already exist, skipping re-embed.`);
+            return existing.count;
+        }
+    } catch (_: any) {
+        // Table might not exist yet — that's fine, insertChunks will handle it
+    }
+
+    // Embed all KB entry contexts
+    const texts = allEntries.map(e => e.context);
+    let embeddings: number[][];
+    try {
+        const { embedBatch } = await import('./embeddingService');
+        embeddings = await embedBatch(texts);
+    } catch (err: any) {
+        console.warn('[KB] Embedding failed, KB will use keyword matching only:', err.message);
+        return 0;
+    }
+
+    // Store as chunks with document_id = -1 (special marker for KB entries)
+    const { insertChunks } = await import('./vectorStore');
+    const chunks = allEntries.map((entry, i) => ({
+        index: i,
+        text: entry.context,
+        embedding: embeddings[i],
+    }));
+
+    try {
+        await insertChunks(dbConn, -1, chunks);
+        console.log(`[KB] Embedded and stored ${chunks.length} KB entries as vector chunks.`);
+    } catch (err: any) {
+        console.warn('[KB] Failed to store KB vectors:', err.message);
+        return 0;
+    }
+
+    return chunks.length;
+}
+
 // ─── Retrieval ───────────────────────────────────────────────────────────────
 
 /**
  * Retrieves context for a query using:
- * 1. Vector search (uploaded documents)
- * 2. Dynamic KB (auto-generated from dataset schema)
- * 3. Hardcoded O2C KB (only for sap_o2c)
+ * 1. Vector search (searches BOTH uploaded documents AND embedded KB entries)
+ * 2. Dynamic KB keyword match (fallback if vector search misses)
+ * 3. Hardcoded O2C KB (only for sap_o2c dataset)
  */
 async function retrieveContext(query: string, dbConn: any = null): Promise<string | null> {
     const db = dbConn || require('../db/connection');
@@ -191,4 +254,4 @@ async function retrieveContext(query: string, dbConn: any = null): Promise<strin
     return null;
 }
 
-export { retrieveContext, buildDynamicKB };
+export { retrieveContext, buildDynamicKB, embedKBEntries };

@@ -10,6 +10,7 @@ import { generateConfig } from '../onboarding/configGenerator';
 import { extractZip } from '../rag/zipExtractor';
 import initDB from '../db/init';
 import { loadDataset } from '../db/loader';
+import { embedKBEntries } from '../rag/knowledgeBase';
 import { validateDatasetConfig } from '../config/datasetValidator';
 import { getActiveConfig, setActiveConfig, getTenantConfig, setTenantConfig } from '../config/activeDataset';
 import { getProviderStatus } from './llmClient';
@@ -315,6 +316,9 @@ export class QueryService {
           setActiveConfig(config);
         }
         clearCache(tenantId);
+
+        // Embed KB entries as vector chunks for semantic schema search
+        try { await embedKBEntries(config, db); } catch (_) {}
 
         // Clean up session
         if (session.dataDir && fs.existsSync(session.dataDir)) {

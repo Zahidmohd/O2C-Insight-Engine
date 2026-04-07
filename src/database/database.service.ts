@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/commo
 import db from '../db/connection';
 import initDB from '../db/init';
 import { loadDataset } from '../db/loader';
+import { embedKBEntries } from '../rag/knowledgeBase';
 import { getTenant, registerTenant, removeTenant, listTenants, getDbForTenant } from '../db/tenantRegistry';
 import { createTursoAdapter } from '../db/tursoAdapter';
 import { getActiveConfig, defaultConfig } from '../config/activeDataset';
@@ -25,6 +26,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await initDB(config, database);
       const totalRows = await loadDataset(config, database);
       this.logger.log(`Default dataset loaded: ${totalRows} rows.`);
+
+      // Embed KB entries as vector chunks for semantic search
+      try {
+        const kbCount = await embedKBEntries(config, database);
+        if (kbCount > 0) this.logger.log(`KB entries embedded: ${kbCount} vector chunks.`);
+      } catch (err: any) {
+        this.logger.warn(`KB embedding skipped: ${err.message}`);
+      }
     } catch (err: any) {
       this.logger.warn(`Default data load skipped or failed: ${err.message}`);
     }
