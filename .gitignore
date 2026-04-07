@@ -33,19 +33,13 @@ datasets/
 
 # Tenant registry (contains auth tokens)
 data/tenants.json
-
+interview-architecture-walkthrough.md
+interview-ai-code.md
+interview-questions.md
+interview-walkthrough.md
 interview-answers.md
+interview-followups.md
 interview-system-overview.md
-interview-ai-code.md
-interview-questions.md
-interview-walkthrough.md
-interview-followups.md
-interview-architecture-walkthrough.md
-interview-ai-code.md
-interview-questions.md
-interview-walkthrough.md
-interview-followups.md
-interview-architecture-walkthrough.md
 interview-revision.md
 interview-tech-deepdive.md
 AI Query Explorer-saved.html

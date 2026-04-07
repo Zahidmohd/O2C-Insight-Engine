@@ -331,10 +331,13 @@ The knowledge base uses dual-path retrieval for domain questions:
 
 ### 9.1 Vector Search (Primary)
 
-When documents have been uploaded via `/api/documents/upload`:
+Vector search is the primary retrieval method. It searches across TWO types of embedded content:
+
+1. **KB entry vectors** — when a dataset is uploaded, auto-generated knowledge entries (table descriptions, column info, relationship maps) are embedded and stored as vector chunks. This makes schema knowledge semantically searchable.
+2. **Document vectors** — when users upload PDFs or DOCX files, those are chunked and embedded too.
 
 ```
-Query → Embed (Xenova/all-MiniLM-L6-v2, 384-dim) → Vector search → Top 5 results
+Query → Embed (all-MiniLM-L6-v2, 384-dim) → Vector search across ALL chunks → Top 5 results
 ```
 
 - **Embedding model:** @huggingface/transformers (local, no API key needed)
@@ -346,17 +349,18 @@ Query → Embed (Xenova/all-MiniLM-L6-v2, 384-dim) → Vector search → Top 5 r
 - **Threshold:** Minimum cosine similarity ≥ 0.3
 - **Persistence:** Document tables survive dataset switches and redeploys
 
-### 9.2 Auto-Generated Knowledge Base
+### 9.2 Auto-Generated Knowledge Base (Keyword Fallback)
 
 When a dataset is uploaded (or the demo SAP O2C dataset is loaded), the system automatically generates knowledge base entries from:
 - Table names and their column structures
 - Detected relationships and join paths
 - Schema-exploration queries (suggested queries derived from the dataset)
 
-If no documents are uploaded or vector search returns no matches:
+These entries are both embedded as vectors (for semantic search) AND available for keyword matching (as fallback):
 
-- **Matching:** Word-boundary regex against auto-generated knowledge entries for the active dataset
-- **Fallback:** If no keyword match, RAG queries return "no context found"
+- **Primary:** Vector search finds KB entries through semantic similarity
+- **Fallback:** If vector search returns nothing, word-boundary regex matches against KB entry keywords
+- **Last resort:** If no keyword match, RAG queries return "no context found"
 - **Hybrid mode:** For HYBRID queries, both RAG context and SQL results are combined
 
 ### 9.3 Document Pipeline
